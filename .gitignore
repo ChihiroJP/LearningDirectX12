@@ -1,0 +1,28 @@
+# Build outputs
+build/
+out/
+
+# Visual Studio
+.vs/
+*.vcxproj*
+*.sln
+*.filters
+*.user
+*.VC.db
+*.VC.opendb
+
+# CMake
+CMakeFiles/
+CMakeCache.txt
+cmake_install.cmake
+Makefile
+
+# Windows artifacts
+*.pdb
+*.ilk
+*.obj
+*.exe
+*.dll
+*.lib
+*.exp
+
