@@ -4,12 +4,43 @@ project(DX12Tutorial12 LANGUAGES CXX)
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
+include(FetchContent)
+
+FetchContent_Declare(
+    imgui
+    GIT_REPOSITORY https://github.com/ocornut/imgui.git
+    GIT_TAG v1.92.5
+)
+FetchContent_MakeAvailable(imgui)
+
+add_library(imgui STATIC
+    ${imgui_SOURCE_DIR}/imgui.cpp
+    ${imgui_SOURCE_DIR}/imgui_draw.cpp
+    ${imgui_SOURCE_DIR}/imgui_tables.cpp
+    ${imgui_SOURCE_DIR}/imgui_widgets.cpp
+    ${imgui_SOURCE_DIR}/imgui_demo.cpp
+    ${imgui_SOURCE_DIR}/backends/imgui_impl_win32.cpp
+    ${imgui_SOURCE_DIR}/backends/imgui_impl_dx12.cpp
+)
+target_include_directories(imgui PUBLIC
+    ${imgui_SOURCE_DIR}
+    ${imgui_SOURCE_DIR}/backends
+)
+if (MSVC)
+    target_compile_options(imgui PRIVATE /W0)
+endif()
+
 add_executable(DX12Tutorial12 WIN32
     src/main.cpp
     src/Win32Window.h
     src/Win32Window.cpp
     src/DxUtil.h
     src/DxUtil.cpp
+    src/Input.h
+    src/Camera.h
+    src/Camera.cpp
+    src/ImGuiLayer.h
+    src/ImGuiLayer.cpp
     src/DxContext.h
     src/DxContext.cpp
 )
@@ -29,6 +60,7 @@ target_link_libraries(DX12Tutorial12 PRIVATE
     d3d12
     dxgi
     d3dcompiler
+    imgui
 )
 
 # Put output in build/bin/<config>/

@@ -4,6 +4,8 @@
 #include <cstdint>
 #include <string>
 
+class Input;
+
 class Win32Window
 {
 public:
@@ -25,7 +27,20 @@ public:
     uint32_t Height() const { return m_height; }
     bool IsMinimized() const { return m_minimized; }
 
+    void SetTitle(const std::wstring& title);
+
     void SetResizeCallback(ResizeCallback cb, void* userData);
+
+    // Input
+    Input& GetInput();
+    const Input& GetInput() const;
+
+    // Mouse capture (useful for FPS-style camera)
+    void SetMouseCaptured(bool captured);
+    bool IsMouseCaptured() const { return m_mouseCaptured; }
+
+    // ImGui Win32 backend needs to see messages first.
+    void SetImGuiEnabled(bool enabled);
 
 private:
     static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam);
@@ -40,5 +55,10 @@ private:
 
     ResizeCallback m_resizeCb = nullptr;
     void* m_resizeUserData = nullptr;
+
+    bool m_mouseCaptured = false;
+    Input* m_input = nullptr;
+
+    bool m_imguiEnabled = false;
 };
 
