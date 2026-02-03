@@ -1,3 +1,8 @@
+// ======================================
+// File: Win32Window.cpp
+// Purpose: Win32 window + message handling (resize/events + raw input + ImGui message routing)
+// ======================================
+
 #include "Win32Window.h"
 #include "Input.h"
 
@@ -158,10 +163,10 @@ LRESULT Win32Window::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam)
 {
     if (m_imguiEnabled)
     {
-        // If ImGui wants to capture this message, let it.
-        LRESULT imguiResult = ImGui_ImplWin32_WndProcHandler(m_hwnd, msg, wParam, lParam);
-        if (imguiResult)
-            return imguiResult;
+        // Always forward messages to ImGui, but do NOT early-return here.
+        // We still want to record raw input/key states for the game; the game layer decides
+        // whether to *use* that input based on ImGui capture flags.
+        ImGui_ImplWin32_WndProcHandler(m_hwnd, msg, wParam, lParam);
     }
 
     switch (msg)

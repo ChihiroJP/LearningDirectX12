@@ -1,3 +1,8 @@
+// ======================================
+// File: Camera.h
+// Purpose: Camera interface (position, yaw/pitch, view/projection matrices)
+// ======================================
+
 #pragma once
 
 #include <DirectXMath.h>

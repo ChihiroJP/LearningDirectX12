@@ -1,3 +1,8 @@
+// ======================================
+// File: ImGuiLayer.cpp
+// Purpose: Dear ImGui integration (DX12 renderer backend + Win32 platform backend)
+// ======================================
+
 #include "ImGuiLayer.h"
 
 #include "Win32Window.h"
@@ -7,6 +12,22 @@
 #include <imgui.h>
 #include <backends/imgui_impl_dx12.h>
 #include <backends/imgui_impl_win32.h>
+
+#include <stdexcept>
+
+static void ImGuiDx12SrvAlloc(ImGui_ImplDX12_InitInfo* info, D3D12_CPU_DESCRIPTOR_HANDLE* out_cpu_desc_handle, D3D12_GPU_DESCRIPTOR_HANDLE* out_gpu_desc_handle)
+{
+    auto* dx = reinterpret_cast<DxContext*>(info->UserData);
+    dx->ImGuiAllocSrv(out_cpu_desc_handle, out_gpu_desc_handle);
+}
+
+static void ImGuiDx12SrvFree(ImGui_ImplDX12_InitInfo* info, D3D12_CPU_DESCRIPTOR_HANDLE cpu_desc_handle, D3D12_GPU_DESCRIPTOR_HANDLE gpu_desc_handle)
+{
+    // Simple starter: no-op free (we allocate a few descriptors once).
+    (void)info;
+    (void)cpu_desc_handle;
+    (void)gpu_desc_handle;
+}
 
 void ImGuiLayer::Initialize(Win32Window& window, DxContext& dx)
 {
@@ -19,13 +40,20 @@ void ImGuiLayer::Initialize(Win32Window& window, DxContext& dx)
     ImGui::StyleColorsDark();
 
     ImGui_ImplWin32_Init(window.Handle());
-    ImGui_ImplDX12_Init(
-        dx.Device(),
-        DxContext::FrameCount,
-        dx.BackBufferFormat(),
-        dx.ImGuiSrvHeap(),
-        dx.ImGuiFontCpuHandle(),
-        dx.ImGuiFontGpuHandle());
+
+    ImGui_ImplDX12_InitInfo init_info{};
+    init_info.Device = dx.Device();
+    init_info.CommandQueue = dx.Queue();
+    init_info.NumFramesInFlight = (int)DxContext::FrameCount;
+    init_info.RTVFormat = dx.BackBufferFormat();
+    init_info.DSVFormat = dx.DepthFormat();
+    init_info.UserData = &dx;
+    init_info.SrvDescriptorHeap = dx.ImGuiSrvHeap();
+    init_info.SrvDescriptorAllocFn = &ImGuiDx12SrvAlloc;
+    init_info.SrvDescriptorFreeFn = &ImGuiDx12SrvFree;
+
+    if (!ImGui_ImplDX12_Init(&init_info))
+        throw std::runtime_error("ImGui_ImplDX12_Init failed");
 
     window.SetImGuiEnabled(true);
 

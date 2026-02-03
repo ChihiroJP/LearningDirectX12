@@ -1,3 +1,8 @@
+// ======================================
+// File: DxUtil.cpp
+// Purpose: Small DX/Win32 helper implementations (debug output, HRESULT formatting)
+// ======================================
+
 #include "DxUtil.h"
 
 #include <sstream>

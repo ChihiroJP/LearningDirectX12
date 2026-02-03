@@ -1,0 +1,42 @@
+#pragma once
+#include "DxUtil.h"
+#include <d3d12.h>
+#include <string>
+#include <vector>
+
+// Forward declaration
+namespace tinygltf {
+class Model;
+}
+
+struct MeshVertex {
+  float pos[3];
+  float normal[3];
+  float uv[2];
+};
+
+struct LoadedMesh {
+  std::vector<MeshVertex> vertices;
+  std::vector<uint16_t> indices;
+};
+
+struct LoadedImage {
+  int width = 0;
+  int height = 0;
+  int channels = 0;
+  std::vector<unsigned char> pixels;
+};
+
+class GltfLoader {
+public:
+  bool LoadModel(const std::string &path);
+  const LoadedMesh &GetMesh() const { return m_mesh; }
+  const LoadedImage &GetImage() const {
+    return m_image;
+  } // Simple 1-image support for now
+
+private:
+  LoadedMesh m_mesh;
+  LoadedImage m_image;
+  // We'll add helper functions here to parse nodes/meshes
+};

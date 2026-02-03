@@ -1,3 +1,8 @@
+// ======================================
+// File: DxUtil.h
+// Purpose: Small DX/Win32 helpers (ThrowIfFailed, string conversion, debug print)
+// ======================================
+
 #pragma once
 
 #include <windows.h>

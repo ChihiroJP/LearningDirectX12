@@ -1,3 +1,8 @@
+// ======================================
+// File: Input.h
+// Purpose: Simple input state (keys + raw mouse delta accumulation)
+// ======================================
+
 #pragma once
 
 #include <windows.h>

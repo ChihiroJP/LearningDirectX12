@@ -1,3 +1,8 @@
+// ======================================
+// File: Camera.cpp
+// Purpose: Free-fly camera implementation (view/projection + WASD movement + yaw/pitch)
+// ======================================
+
 #include "Camera.h"
 #include "Input.h"
 

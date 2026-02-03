@@ -13,6 +13,23 @@ FetchContent_Declare(
 )
 FetchContent_MakeAvailable(imgui)
 
+FetchContent_Declare(
+    tinyexr
+    GIT_REPOSITORY https://github.com/syoyo/tinyexr.git
+    GIT_TAG v1.0.12
+)
+# tinyexr's own CMakeLists builds a sample exe by default; disable it.
+set(TINYEXR_BUILD_SAMPLE OFF CACHE BOOL "" FORCE)
+set(TINYEXR_USE_MINIZ ON CACHE BOOL "" FORCE)
+FetchContent_MakeAvailable(tinyexr)
+
+FetchContent_Declare(
+    tinygltf
+    GIT_REPOSITORY https://github.com/syoyo/tinygltf.git
+    GIT_TAG v2.9.3
+)
+FetchContent_MakeAvailable(tinygltf)
+
 add_library(imgui STATIC
     ${imgui_SOURCE_DIR}/imgui.cpp
     ${imgui_SOURCE_DIR}/imgui_draw.cpp
@@ -36,6 +53,8 @@ add_executable(DX12Tutorial12 WIN32
     src/Win32Window.cpp
     src/DxUtil.h
     src/DxUtil.cpp
+    src/HdriLoader.h
+    src/HdriLoader.cpp
     src/Input.h
     src/Camera.h
     src/Camera.cpp
@@ -43,6 +62,8 @@ add_executable(DX12Tutorial12 WIN32
     src/ImGuiLayer.cpp
     src/DxContext.h
     src/DxContext.cpp
+    src/GltfLoader.h
+    src/GltfLoader.cpp
 )
 
 target_compile_definitions(DX12Tutorial12 PRIVATE
@@ -61,6 +82,14 @@ target_link_libraries(DX12Tutorial12 PRIVATE
     dxgi
     d3dcompiler
     imgui
+    tinyexr
+    tinygltf
+)
+
+target_include_directories(DX12Tutorial12 PRIVATE
+    ${tinyexr_SOURCE_DIR}
+    ${tinyexr_SOURCE_DIR}/deps/miniz
+    ${tinygltf_SOURCE_DIR}
 )
 
 # Put output in build/bin/<config>/
@@ -71,4 +100,6 @@ set_target_properties(DX12Tutorial12 PROPERTIES
 add_custom_command(TARGET DX12Tutorial12 POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:DX12Tutorial12>/shaders"
     COMMAND ${CMAKE_COMMAND} -E copy_directory "${CMAKE_SOURCE_DIR}/shaders" "$<TARGET_FILE_DIR:DX12Tutorial12>/shaders"
+    COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:DX12Tutorial12>/Assets"
+    COMMAND ${CMAKE_COMMAND} -E copy_directory "${CMAKE_SOURCE_DIR}/Assets" "$<TARGET_FILE_DIR:DX12Tutorial12>/Assets"
 )

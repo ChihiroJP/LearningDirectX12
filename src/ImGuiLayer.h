@@ -1,3 +1,8 @@
+// ======================================
+// File: ImGuiLayer.h
+// Purpose: Dear ImGui layer interface (initialize, build UI, render)
+// ======================================
+
 #pragma once
 
 #include <cstdint>

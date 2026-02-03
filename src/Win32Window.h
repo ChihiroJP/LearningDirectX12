@@ -1,3 +1,8 @@
+// ======================================
+// File: Win32Window.h
+// Purpose: Win32 window wrapper (HWND, message pump, resize callback, input access)
+// ======================================
+
 #pragma once
 
 #include <windows.h>

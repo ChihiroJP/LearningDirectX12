@@ -3,9 +3,16 @@
 This repo is a **DirectX 12 learning project** designed to evolve into a **portfolio-quality 3D game/demo** with modern rendering features and “engine-like” structure (clean frame resources, descriptor management, render passes).
 
 ### Current status
-- **Working**: Win32 window + DX12 device/queue/swapchain/RTVs + fences + resize handling
-- **Rendering**: clears the backbuffer + draws a **colored triangle**
-- **Details**: see `notes/starting_points.md` (includes code excerpts + deep explanations + issues/solutions)
+- ✅ **Working**: Win32 window + DX12 device/queue/swapchain + resize-safe fences
+- ✅ **3D scene**: depth buffer + indexed cube + free-fly camera (WASD + mouse look)
+- ✅ **Debug UI**: Dear ImGui (DX12 backend) integrated
+- ✅ **Renderer foundation**: frames-in-flight + shader-visible descriptor heap strategy (Phase 3)
+- **Details / deep notes**:
+  - `notes/starting_points.md`
+  - `notes/camera_notes.md`
+  - `notes/depthbuffer_basic3d_notes.md`
+  - `notes/imgui_notes.md`
+  - `notes/frame_resources_notes.md`
 
 ### Requirements
 - Windows 10/11
@@ -31,41 +38,22 @@ cmake --build build --config Debug
 - **`notes/`**: learning notes / architecture notes / debugging logs
 
 ## Roadmap (recommended DX12 learning flow)
-Your original flow was solid, but DX12 is very “foundation-driven”. This roadmap is ordered so we don’t constantly rewrite core systems while adding features.
+DX12 is very “foundation-driven”. This roadmap is ordered so we don’t constantly rewrite core systems while adding features.
 
-### Phase 0 — Foundations (done)
-- **Win32 window + message pump**
-- **DX12 core**: device/queue/swapchain/RTV heap, command list, fences
-- **Correct backbuffer barriers**: `PRESENT <-> RENDER_TARGET`
-- **First draw**: triangle + minimal PSO + runtime HLSL compile
+### Phase list (✅ = done)
+- ✅ **Phase 0 — Foundations**: Win32 window + DX12 device/queue/swapchain/RTVs + barriers + first draw (`notes/starting_points.md`)
+- ✅ **Phase 1 — Engine loop + camera + input**: dt timing + raw mouse + free-fly camera (`notes/camera_notes.md`)
+- ✅ **Phase 2 — True 3D rendering**: depth buffer + indexed cube + WVP constant buffer (`notes/depthbuffer_basic3d_notes.md`)
+- ✅ **Phase 2.5 — ImGui debug UI**: Dear ImGui integrated on Win32 + DX12 (`notes/imgui_notes.md`)
+- ✅ **Phase 3 — Renderer architecture upgrade**: frames-in-flight + main shader-visible descriptor heap (`notes/frame_resources_notes.md`)
 
-What you learned here:
-- **Swapchain creation** (`DXGI_SWAP_EFFECT_FLIP_DISCARD`)
-- **RTV descriptor heap** and backbuffer RTV creation
-- **Command allocator/list lifecycle**
-- **Fences** for safe resize/shutdown
-- **Resource state transitions** (barriers)
-
-### Phase 1 — Engine loop + camera + input (next)
-Goal: make a controllable camera and stable timing so everything else is built on real “game loop” behavior.
-- **Timing**: delta time + optional fixed timestep
-- **Input**: keyboard + mouse (mouse capture for FPS camera)
-- **Math**: vectors/matrices (or choose a library) + transforms
-- **Camera**: free-fly with view/projection matrices
-
-DX12 concepts reinforced:
-- per-frame updates and “what changes every frame vs what doesn’t”
-
-### Phase 2 — True 3D rendering (depth + cube)
-Goal: go from “triangle demo” to “3D scene”.
-- Add **depth buffer** (DSV heap + depth texture + clear)
-- Add **indexed mesh** (cube) with world/view/proj constants
-- Add **per-frame constant buffer** and update it every frame
-
-DX12 concepts learned:
-- **DSV / depth textures**
-- **Constant buffers** and alignment rules
-- **Viewport/scissor correctness after resize**
-
-### Phase 3 — Renderer architecture upgrade (frame resources + descriptor strategy)
+- ✅ **Phase 3.5 — Skybox**: HDRI (EXR) sky background + SRV/sampler + fullscreen sky pass (`notes/skybox_notes.md`)
+- ✅ **Phase 4 — Scene baseline (visual anchors)**: grid floor + axis gizmo + multiple objects (`notes/scene_baseline_notes.md`)
+- ✅ **Phase 5 — Asset pipeline v1 (Geometry)**: load **glTF 2.0** (tinygltf) + extract vertices/indices (`notes/glTF_notes.md`)
+- **Phase 5.5 — Asset pipeline v2 (Textures)**: load glTF textures + create SRVs + bind to shader
+- **Phase 6 — Lighting v1**: directional light + Blinn/Phong or simple PBR-lite + gamma/tonemap basics
+- **Phase 7 — Shadows v1**: shadow map pass + PCF filtering + cascades later (optional)
+- **Phase 8 — Render graph / passes**: formalize passes (shadow, opaque, UI) + resource lifetime/transition helpers
+- **Phase 9 — Post-processing**: bloom + exposure/tonemap + optional FXAA/TAA
+- **Phase 10 — “Portfolio demo” polish**: camera paths + simple gameplay loop + profiling HUD + capture-ready presentation
 
