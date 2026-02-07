@@ -10,17 +10,26 @@
 
 #include <array>
 #include <cstdint>
+#include <memory>
+#include <vector>
 
 #include <d3d12.h>
 #include <dxgi1_6.h>
 
 #include "GltfLoader.h"
+#include "Lighting.h"
+#include "ShadowMap.h"
 #include <DirectXMath.h>
 #include <wrl.h>
+
+class MeshRenderer;
 
 class DxContext {
 public:
   static constexpr uint32_t FrameCount = 2;
+
+  DxContext();
+  ~DxContext();
 
   void Initialize(HWND hwnd, uint32_t width, uint32_t height,
                   bool enableDebugLayer);
@@ -42,12 +51,22 @@ public:
                      const DirectX::XMMATRIX &view,
                      const DirectX::XMMATRIX &proj);
 
-  // New: Mesh rendering
-  void CreateMeshResources(const LoadedMesh &mesh,
-                           const LoadedImage *img = nullptr);
-  void DrawMesh(const DirectX::XMMATRIX &world, const DirectX::XMMATRIX &view,
-                const DirectX::XMMATRIX &proj);
-  void CreateTextureResources(const LoadedImage &img);
+  // Mesh rendering (supports multiple meshes).
+  // Returns a mesh ID you can draw later.
+  uint32_t CreateMeshResources(const LoadedMesh &mesh,
+                               const LoadedImage *baseColorImg = nullptr);
+  void DrawMesh(uint32_t meshId, const DirectX::XMMATRIX &world,
+                const DirectX::XMMATRIX &view, const DirectX::XMMATRIX &proj,
+                MeshLightingParams lighting = {},
+                MeshShadowParams shadow = {});
+
+  // Shadows v1 (directional light shadow map)
+  void BeginShadowPass();
+  void EndShadowPass();
+  void DrawMeshShadow(uint32_t meshId, const DirectX::XMMATRIX &world,
+                      const DirectX::XMMATRIX &lightViewProj);
+  D3D12_GPU_DESCRIPTOR_HANDLE ShadowSrvGpu() const;
+  uint32_t ShadowMapSize() const;
 
   void EndFrame();
 
@@ -68,6 +87,9 @@ public:
   ID3D12DescriptorHeap *MainSrvHeap() const { return m_mainSrvHeap.Get(); }
 
 private:
+  friend class MeshRenderer;
+  friend class ShadowMap;
+
   void CreateDeviceAndQueue(bool enableDebugLayer);
   void CreateSwapChain(HWND hwnd);
   void CreateRtvHeapAndViews();
@@ -90,6 +112,8 @@ private:
   D3D12_CPU_DESCRIPTOR_HANDLE CurrentRtv() const;
   D3D12_CPU_DESCRIPTOR_HANDLE Dsv() const;
   ID3D12Resource *CurrentBackBuffer() const;
+  D3D12_GPU_VIRTUAL_ADDRESS AllocFrameConstants(uint32_t sizeBytes,
+                                                void **outCpuPtr);
 
 private:
   uint32_t m_width = 0;
@@ -148,19 +172,9 @@ private:
   Microsoft::WRL::ComPtr<ID3D12Resource> m_skyTexUpload;
   D3D12_GPU_DESCRIPTOR_HANDLE m_skySrvGpu{};
 
-  // Mesh pipeline
-  Microsoft::WRL::ComPtr<ID3D12RootSignature> m_meshRootSig;
-  Microsoft::WRL::ComPtr<ID3D12PipelineState> m_meshPso;
-  Microsoft::WRL::ComPtr<ID3D12Resource> m_meshVB;
-  Microsoft::WRL::ComPtr<ID3D12Resource> m_meshIB;
-  D3D12_VERTEX_BUFFER_VIEW m_meshVbView{};
-  D3D12_INDEX_BUFFER_VIEW m_meshIbView{};
-  uint32_t m_meshIndexCount = 0;
-
-  // Mesh Texture
-  Microsoft::WRL::ComPtr<ID3D12Resource> m_meshTex;
-  Microsoft::WRL::ComPtr<ID3D12Resource> m_meshTexUpload;
-  D3D12_GPU_DESCRIPTOR_HANDLE m_meshTexSrvGpu{};
+  // Mesh renderer module (moved out of DxContext.cpp for maintainability).
+  std::unique_ptr<MeshRenderer> m_meshRenderer;
+  std::unique_ptr<ShadowMap> m_shadowMap;
 
   // ImGui SRV heap (shader-visible, used for font texture)
   Microsoft::WRL::ComPtr<ID3D12DescriptorHeap> m_imguiSrvHeap;
@@ -177,10 +191,10 @@ private:
   struct FrameResources {
     Microsoft::WRL::ComPtr<ID3D12CommandAllocator> cmdAlloc;
 
-    // Per-frame scene constant buffer (for WVP, etc.)
-    Microsoft::WRL::ComPtr<ID3D12Resource> sceneCb;
-    uint8_t *sceneCbMapped = nullptr;
-    D3D12_GPU_DESCRIPTOR_HANDLE sceneCbGpu = {};
+    // Per-frame constant buffer ring (upload heap) for per-draw constants.
+    Microsoft::WRL::ComPtr<ID3D12Resource> constants;
+    uint8_t *constantsMapped = nullptr;
+    uint32_t constantsOffset = 0;
 
     // Per-frame sky constants (inverse VP, exposure, camera position)
     Microsoft::WRL::ComPtr<ID3D12Resource> skyCb;

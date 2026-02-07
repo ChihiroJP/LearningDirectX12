@@ -38,7 +38,8 @@ float2 DirToLatLongUV(float3 d)
     // Left-handed: +Z forward, +X right, +Y up.
     // Map direction to equirectangular (u: 0..1, v: 0..1).
     float phi = atan2(d.z, d.x);          // -pi..pi
-    float theta = acos(saturate(d.y));    // 0..pi
+    // NOTE: d.y is in [-1, 1]. Using saturate() breaks the lower hemisphere.
+    float theta = acos(clamp(d.y, -1.0, 1.0));    // 0..pi
     float u = phi / TWO_PI + 0.5;
     float v = theta / PI;
     return float2(u, v);

@@ -31,12 +31,11 @@ class GltfLoader {
 public:
   bool LoadModel(const std::string &path);
   const LoadedMesh &GetMesh() const { return m_mesh; }
-  const LoadedImage &GetImage() const {
-    return m_image;
-  } // Simple 1-image support for now
+  // Phase 5.5: return the material's baseColor texture image (albedo).
+  const LoadedImage &GetBaseColorImage() const { return m_baseColorImage; }
 
 private:
   LoadedMesh m_mesh;
-  LoadedImage m_image;
+  LoadedImage m_baseColorImage;
   // We'll add helper functions here to parse nodes/meshes
 };

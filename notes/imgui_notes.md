@@ -76,15 +76,29 @@ void DxContext::CreateImGuiResources()
 {
     D3D12_DESCRIPTOR_HEAP_DESC heap{};
     heap.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
-    heap.NumDescriptors = 1;
+    heap.NumDescriptors = 128;
     heap.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
     m_device->CreateDescriptorHeap(&heap, IID_PPV_ARGS(&m_imguiSrvHeap));
 }
 ```
 
 ### Explanation
-- We allocate exactly **1 descriptor** because ImGui only needs one for the font texture (for now).
-- Later, once we have a real engine descriptor allocator, you’ll likely allocate from a bigger heap.
+- In ImGui v1.92+, the DX12 backend expects to allocate **more than one** SRV descriptor over time (texture support), so we allocate a small heap (128) and provide a simple allocator.
+
+### Code (excerpt): simple SRV allocator
+
+```cpp
+void DxContext::ImGuiAllocSrv(D3D12_CPU_DESCRIPTOR_HANDLE* outCpu, D3D12_GPU_DESCRIPTOR_HANDLE* outGpu)
+{
+    D3D12_CPU_DESCRIPTOR_HANDLE cpu = m_imguiSrvHeap->GetCPUDescriptorHandleForHeapStart();
+    D3D12_GPU_DESCRIPTOR_HANDLE gpu = m_imguiSrvHeap->GetGPUDescriptorHandleForHeapStart();
+    cpu.ptr += (SIZE_T)m_imguiSrvNext * (SIZE_T)m_imguiSrvDescriptorSize;
+    gpu.ptr += (UINT64)m_imguiSrvNext * (UINT64)m_imguiSrvDescriptorSize;
+    ++m_imguiSrvNext;
+    *outCpu = cpu;
+    *outGpu = gpu;
+}
+```
 
 We expose the CPU/GPU handles for the start of that heap:
 
@@ -148,13 +162,19 @@ ImGui::CreateContext();
 ImGui::StyleColorsDark();
 
 ImGui_ImplWin32_Init(window.Handle());
-ImGui_ImplDX12_Init(
-    dx.Device(),
-    DxContext::FrameCount,
-    dx.BackBufferFormat(),
-    dx.ImGuiSrvHeap(),
-    dx.ImGuiFontCpuHandle(),
-    dx.ImGuiFontGpuHandle());
+
+ImGui_ImplDX12_InitInfo init_info{};
+init_info.Device = dx.Device();
+init_info.CommandQueue = dx.Queue();
+init_info.NumFramesInFlight = (int)DxContext::FrameCount;
+init_info.RTVFormat = dx.BackBufferFormat();
+init_info.DSVFormat = dx.DepthFormat();
+init_info.UserData = &dx;
+init_info.SrvDescriptorHeap = dx.ImGuiSrvHeap();
+init_info.SrvDescriptorAllocFn = &ImGuiDx12SrvAlloc;
+init_info.SrvDescriptorFreeFn = &ImGuiDx12SrvFree;
+
+ImGui_ImplDX12_Init(&init_info);
 ```
 
 ### Per-frame begin
@@ -228,6 +248,15 @@ if (!uiWantsKeyboard)
 - **Solution**: call `ImGui_ImplWin32_WndProcHandler` inside the window procedure (and enable/disable it via `SetImGuiEnabled`).
 
 ### Issue 3: “Camera moves while clicking UI”
+### Issue 4: Runtime assert: `atlas->TexIsBuilt` / “font atlas is not built”
+- **Symptom**: assertion in `imgui_draw.cpp` about font atlas not built and/or backend not supporting textures.
+- **Cause**: with ImGui v1.92+ DX12 backend, using the legacy init path + a single-descriptor heap can prevent the backend from having the descriptor allocation it expects.
+- **Solution**:
+  - use the **new** `ImGui_ImplDX12_InitInfo` API
+  - provide `CommandQueue`
+  - provide SRV descriptor alloc/free callbacks
+  - back it with a shader-visible SRV heap large enough (e.g. 128 descriptors)
+
 - **Cause**: both systems read the same input.
 - **Solution**: respect `io.WantCaptureMouse/WantCaptureKeyboard` to pause camera control while interacting with UI.
 

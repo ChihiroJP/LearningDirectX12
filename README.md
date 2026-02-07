@@ -13,6 +13,12 @@ This repo is a **DirectX 12 learning project** designed to evolve into a **portf
   - `notes/depthbuffer_basic3d_notes.md`
   - `notes/imgui_notes.md`
   - `notes/frame_resources_notes.md`
+  - `notes/skybox_notes.md`
+  - `notes/scene_baseline_notes.md`
+  - `notes/glTF_notes.md`
+  - `notes/glTF_textures_notes.md`
+  - `notes/terrain_notes.md`
+  - `notes/lighting_v1_notes.md`
 
 ### Requirements
 - Windows 10/11
@@ -50,9 +56,12 @@ DX12 is very “foundation-driven”. This roadmap is ordered so we don’t cons
 - ✅ **Phase 3.5 — Skybox**: HDRI (EXR) sky background + SRV/sampler + fullscreen sky pass (`notes/skybox_notes.md`)
 - ✅ **Phase 4 — Scene baseline (visual anchors)**: grid floor + axis gizmo + multiple objects (`notes/scene_baseline_notes.md`)
 - ✅ **Phase 5 — Asset pipeline v1 (Geometry)**: load **glTF 2.0** (tinygltf) + extract vertices/indices (`notes/glTF_notes.md`)
-- **Phase 5.5 — Asset pipeline v2 (Textures)**: load glTF textures + create SRVs + bind to shader
-- **Phase 6 — Lighting v1**: directional light + Blinn/Phong or simple PBR-lite + gamma/tonemap basics
-- **Phase 7 — Shadows v1**: shadow map pass + PCF filtering + cascades later (optional)
+- ✅ **Phase 5.5 — Asset pipeline v2 (Textures)**: resolve glTF baseColor texture + upload + SRV binding (`notes/glTF_textures_notes.md`)
+- ✅ **Phase 5.6 — Terrain floor (pre-lighting)**: add a large ground/terrain surface for scale (`notes/terrain_notes.md`)
+- ✅ **Phase 6 — Lighting v1**: directional light + PBR-lite (GGX) + basic gamma (`notes/lighting_v1_notes.md`)
+  - **6.3: Add IBL later** (use your HDRI for ambient/spec)
+- **Phase 7 — Shadows v1**: shadow map pass + PCF filtering
+  - **7.5** — Cascades later (optional)
 - **Phase 8 — Render graph / passes**: formalize passes (shadow, opaque, UI) + resource lifetime/transition helpers
 - **Phase 9 — Post-processing**: bloom + exposure/tonemap + optional FXAA/TAA
 - **Phase 10 — “Portfolio demo” polish**: camera paths + simple gameplay loop + profiling HUD + capture-ready presentation

@@ -55,6 +55,10 @@ add_executable(DX12Tutorial12 WIN32
     src/DxUtil.cpp
     src/HdriLoader.h
     src/HdriLoader.cpp
+    src/Lighting.h
+    src/Lighting.cpp
+    src/ShadowMap.h
+    src/ShadowMap.cpp
     src/Input.h
     src/Camera.h
     src/Camera.cpp
@@ -62,6 +66,8 @@ add_executable(DX12Tutorial12 WIN32
     src/ImGuiLayer.cpp
     src/DxContext.h
     src/DxContext.cpp
+    src/MeshRenderer.h
+    src/MeshRenderer.cpp
     src/GltfLoader.h
     src/GltfLoader.cpp
 )
@@ -81,6 +87,7 @@ target_link_libraries(DX12Tutorial12 PRIVATE
     d3d12
     dxgi
     d3dcompiler
+    dbghelp
     imgui
     tinyexr
     tinygltf

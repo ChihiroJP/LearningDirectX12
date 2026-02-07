@@ -7,6 +7,8 @@
 #include "DxContext.h"
 #include "DxUtil.h"
 #include "HdriLoader.h"
+#include "MeshRenderer.h"
+#include "ShadowMap.h"
 
 #include <cstring>
 #include <d3dcompiler.h>
@@ -20,6 +22,8 @@ static ComPtr<ID3DBlob> CompileShader(const wchar_t *filePath,
                                       const char *target);
 static UINT Align256(UINT size);
 
+static constexpr uint32_t kFrameConstantsBytes = 256 * 1024; // 256KB per frame
+
 static void EnableDebugLayerIfRequested(bool enable) {
   if (!enable)
     return;
@@ -29,6 +33,9 @@ static void EnableDebugLayerIfRequested(bool enable) {
     debug->EnableDebugLayer();
   }
 }
+
+DxContext::DxContext() = default;
+DxContext::~DxContext() = default;
 
 void DxContext::Initialize(HWND hwnd, uint32_t width, uint32_t height,
                            bool enableDebugLayer) {
@@ -50,6 +57,9 @@ void DxContext::Initialize(HWND hwnd, uint32_t width, uint32_t height,
   CreateSwapChain(hwnd);
   CreateRtvHeapAndViews();
   CreateDepthResources();
+  // Shadows v1: create a single directional shadow map (fixed resolution).
+  m_shadowMap = std::make_unique<ShadowMap>();
+  m_shadowMap->Initialize(*this, 2048);
   CreateFence();
 
   CreateTriangleResources();
@@ -124,11 +134,16 @@ DxContext::MainSrvGpuFromCpu(D3D12_CPU_DESCRIPTOR_HANDLE cpu) const {
 void DxContext::Shutdown() {
   WaitForGpu();
 
+  // Release renderer modules before tearing down core DX12 objects.
+  m_meshRenderer.reset();
+  m_shadowMap.reset();
+
   for (auto &fr : m_frames) {
-    if (fr.sceneCb && fr.sceneCbMapped) {
-      fr.sceneCb->Unmap(0, nullptr);
-      fr.sceneCbMapped = nullptr;
+    if (fr.constants && fr.constantsMapped) {
+      fr.constants->Unmap(0, nullptr);
+      fr.constantsMapped = nullptr;
     }
+    fr.constantsOffset = 0;
   }
 
   if (m_fenceEvent) {
@@ -176,360 +191,51 @@ void DxContext::CreateDeviceAndQueue(bool enableDebugLayer) {
                 "CreateCommandQueue failed");
 }
 
-void DxContext::CreateMeshResources(const LoadedMesh &mesh,
-                                    const LoadedImage *img) {
-  if (mesh.vertices.empty() || mesh.indices.empty())
-    return;
-
-  m_meshIndexCount = static_cast<uint32_t>(mesh.indices.size());
-
-  // 1. Root Sig (1 CBV at b0, 1 TABLE at t0 for Texture)
-  D3D12_DESCRIPTOR_RANGE ranges[2]{};
-  ranges[0].RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_CBV;
-  ranges[0].NumDescriptors = 1;
-  ranges[0].BaseShaderRegister = 0;
-  ranges[0].OffsetInDescriptorsFromTableStart = 0;
-
-  ranges[1].RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
-  ranges[1].NumDescriptors = 1;
-  ranges[1].BaseShaderRegister = 0; // t0
-  ranges[1].OffsetInDescriptorsFromTableStart = 0;
-
-  // Use two tables or one complex table?
-  // Let's use 2 parameters: 0 = CBV table, 1 = SRV table
-  D3D12_ROOT_PARAMETER params[2]{};
-  params[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
-  params[0].DescriptorTable.NumDescriptorRanges = 1;
-  params[0].DescriptorTable.pDescriptorRanges = &ranges[0]; // CBV
-  params[0].ShaderVisibility = D3D12_SHADER_VISIBILITY_VERTEX;
-
-  params[1].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
-  params[1].DescriptorTable.NumDescriptorRanges = 1;
-  params[1].DescriptorTable.pDescriptorRanges = &ranges[1]; // SRV
-  params[1].ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
-
-  // Static Sampler
-  D3D12_STATIC_SAMPLER_DESC samp{};
-  samp.Filter = D3D12_FILTER_MIN_MAG_MIP_LINEAR;
-  samp.AddressU = D3D12_TEXTURE_ADDRESS_MODE_WRAP;
-  samp.AddressV = D3D12_TEXTURE_ADDRESS_MODE_WRAP;
-  samp.AddressW = D3D12_TEXTURE_ADDRESS_MODE_WRAP;
-  samp.MaxLOD = D3D12_FLOAT32_MAX;
-  samp.ShaderRegister = 0; // s0
-  samp.ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
-
-  D3D12_ROOT_SIGNATURE_DESC rsDesc{};
-  rsDesc.NumParameters = 2;
-  rsDesc.pParameters = params;
-  rsDesc.NumStaticSamplers = 1;
-  rsDesc.pStaticSamplers = &samp;
-  rsDesc.Flags = D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT;
-
-  ComPtr<ID3DBlob> rsBlob, rsError;
-  ThrowIfFailed(D3D12SerializeRootSignature(
-                    &rsDesc, D3D_ROOT_SIGNATURE_VERSION_1, &rsBlob, &rsError),
-                "Serialize Mesh RS failed");
-  ThrowIfFailed(m_device->CreateRootSignature(0, rsBlob->GetBufferPointer(),
-                                              rsBlob->GetBufferSize(),
-                                              IID_PPV_ARGS(&m_meshRootSig)),
-                "Create Mesh RS failed");
-
-  // 2. PSO
-  auto vs = CompileShader(L"shaders/mesh.hlsl", "VSMain", "vs_5_0");
-  auto ps = CompileShader(L"shaders/mesh.hlsl", "PSMain", "ps_5_0");
-
-  D3D12_INPUT_ELEMENT_DESC inputElems[] = {
-      {"POSITION", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 0,
-       D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0},
-      {"NORMAL", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 12,
-       D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0},
-      {"TEXCOORD", 0, DXGI_FORMAT_R32G32_FLOAT, 0, 24,
-       D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0},
-  };
-
-  D3D12_GRAPHICS_PIPELINE_STATE_DESC pso{};
-  pso.pRootSignature = m_meshRootSig.Get();
-  pso.VS = {vs->GetBufferPointer(), vs->GetBufferSize()};
-  pso.PS = {ps->GetBufferPointer(), ps->GetBufferSize()};
-
-  // Standard Blend
-  D3D12_BLEND_DESC blend{};
-  blend.RenderTarget[0].BlendEnable = FALSE;
-  blend.RenderTarget[0].RenderTargetWriteMask = D3D12_COLOR_WRITE_ENABLE_ALL;
-  pso.BlendState = blend;
-  pso.SampleMask = UINT_MAX;
-
-  D3D12_RASTERIZER_DESC rast{};
-  rast.FillMode = D3D12_FILL_MODE_SOLID;
-  rast.CullMode = D3D12_CULL_MODE_BACK;
-  rast.DepthClipEnable = TRUE;
-  pso.RasterizerState = rast;
-
-  D3D12_DEPTH_STENCIL_DESC ds{};
-  ds.DepthEnable = TRUE;
-  ds.DepthWriteMask = D3D12_DEPTH_WRITE_MASK_ALL;
-  ds.DepthFunc = D3D12_COMPARISON_FUNC_LESS;
-  pso.DepthStencilState = ds;
-  pso.DSVFormat = m_depthFormat;
-
-  pso.InputLayout = {inputElems, _countof(inputElems)};
-  pso.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE;
-  pso.NumRenderTargets = 1;
-  pso.RTVFormats[0] = m_backBufferFormat;
-  pso.SampleDesc.Count = 1;
-
-  ThrowIfFailed(
-      m_device->CreateGraphicsPipelineState(&pso, IID_PPV_ARGS(&m_meshPso)),
-      "Create Mesh PSO failed");
-
-  // 3. Batched Upload (Vertices + Indices)
-  const UINT vbSize =
-      static_cast<UINT>(mesh.vertices.size() * sizeof(MeshVertex));
-  const UINT ibSize = static_cast<UINT>(mesh.indices.size() * sizeof(uint16_t));
-
-  D3D12_HEAP_PROPERTIES uploadHeap{};
-  uploadHeap.Type = D3D12_HEAP_TYPE_UPLOAD;
-
-  // VB
-  D3D12_RESOURCE_DESC vbDesc{};
-  vbDesc.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
-  vbDesc.Width = vbSize;
-  vbDesc.Height = 1;
-  vbDesc.DepthOrArraySize = 1;
-  vbDesc.MipLevels = 1;
-  vbDesc.SampleDesc.Count = 1;
-  vbDesc.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
-  ThrowIfFailed(m_device->CreateCommittedResource(
-                    &uploadHeap, D3D12_HEAP_FLAG_NONE, &vbDesc,
-                    D3D12_RESOURCE_STATE_GENERIC_READ, nullptr,
-                    IID_PPV_ARGS(&m_meshVB)),
-                "Create Mesh VB failed");
-
-  void *mapped = nullptr;
-  m_meshVB->Map(0, nullptr, &mapped);
-  memcpy(mapped, mesh.vertices.data(), vbSize);
-  m_meshVB->Unmap(0, nullptr);
-
-  m_meshVbView.BufferLocation = m_meshVB->GetGPUVirtualAddress();
-  m_meshVbView.SizeInBytes = vbSize;
-  m_meshVbView.StrideInBytes = sizeof(MeshVertex);
-
-  // IB
-  D3D12_RESOURCE_DESC ibDesc{};
-  ibDesc.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
-  ibDesc.Width = ibSize;
-  ibDesc.Height = 1;
-  ibDesc.DepthOrArraySize = 1;
-  ibDesc.MipLevels = 1;
-  ibDesc.SampleDesc.Count = 1;
-  ibDesc.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
-  ThrowIfFailed(m_device->CreateCommittedResource(
-                    &uploadHeap, D3D12_HEAP_FLAG_NONE, &ibDesc,
-                    D3D12_RESOURCE_STATE_GENERIC_READ, nullptr,
-                    IID_PPV_ARGS(&m_meshIB)),
-                "Create Mesh IB failed");
-
-  m_meshIB->Map(0, nullptr, &mapped);
-  memcpy(mapped, mesh.indices.data(), ibSize);
-  m_meshIB->Unmap(0, nullptr);
-
-  m_meshIbView.BufferLocation = m_meshIB->GetGPUVirtualAddress();
-  m_meshIbView.SizeInBytes = ibSize;
-  m_meshIbView.Format = DXGI_FORMAT_R16_UINT;
-
-  // 4. Create Texture if present
-  if (img && img->pixels.size() > 0) {
-    CreateTextureResources(*img);
-  }
+uint32_t DxContext::CreateMeshResources(const LoadedMesh &mesh,
+                                       const LoadedImage *baseColorImg) {
+  if (!m_meshRenderer)
+    m_meshRenderer = std::make_unique<MeshRenderer>();
+  return m_meshRenderer->CreateMeshResources(*this, mesh, baseColorImg);
 }
 
-void DxContext::CreateTextureResources(const LoadedImage &img) {
-  // 1. Create Texture (Default Heap)
-  D3D12_RESOURCE_DESC tex{};
-  tex.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
-  tex.Width = static_cast<UINT64>(img.width);
-  tex.Height = static_cast<UINT>(img.height);
-  tex.DepthOrArraySize = 1;
-  tex.MipLevels = 1;
-  tex.Format = DXGI_FORMAT_R8G8B8A8_UNORM; // Assuming RGBA8
-  tex.SampleDesc.Count = 1;
-  tex.Layout = D3D12_TEXTURE_LAYOUT_UNKNOWN;
-
-  D3D12_HEAP_PROPERTIES defaultHeap{};
-  defaultHeap.Type = D3D12_HEAP_TYPE_DEFAULT;
-
-  ThrowIfFailed(
-      m_device->CreateCommittedResource(&defaultHeap, D3D12_HEAP_FLAG_NONE,
-                                        &tex, D3D12_RESOURCE_STATE_COPY_DEST,
-                                        nullptr, IID_PPV_ARGS(&m_meshTex)),
-      "Create Mesh Tex failed");
-
-  // 2. Upload Buffer
-  UINT64 uploadBufferSize = 0;
-  D3D12_PLACED_SUBRESOURCE_FOOTPRINT footprint{};
-  UINT numRows = 0;
-  UINT64 rowSize = 0;
-
-  m_device->GetCopyableFootprints(&tex, 0, 1, 0, &footprint, &numRows, &rowSize,
-                                  &uploadBufferSize);
-
-  D3D12_HEAP_PROPERTIES uploadHeap{};
-  uploadHeap.Type = D3D12_HEAP_TYPE_UPLOAD;
-
-  D3D12_RESOURCE_DESC bufferDesc{};
-  bufferDesc.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
-  bufferDesc.Width = uploadBufferSize;
-  bufferDesc.Height = 1;
-  bufferDesc.DepthOrArraySize = 1;
-  bufferDesc.MipLevels = 1;
-  bufferDesc.SampleDesc.Count = 1;
-  bufferDesc.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
-
-  ThrowIfFailed(m_device->CreateCommittedResource(
-                    &uploadHeap, D3D12_HEAP_FLAG_NONE, &bufferDesc,
-                    D3D12_RESOURCE_STATE_GENERIC_READ, nullptr,
-                    IID_PPV_ARGS(&m_meshTexUpload)),
-                "Create Mesh Tex Upload buffer failed");
-
-  // 3. Copy Data
-  void *mapped = nullptr;
-  m_meshTexUpload->Map(0, nullptr, &mapped);
-
-  // We need to copy row-by-row if stride differs (which it often does due to
-  // alignment)
-  const uint8_t *srcData = img.pixels.data();
-  uint8_t *destData = reinterpret_cast<uint8_t *>(mapped);
-
-  for (UINT i = 0; i < numRows; ++i) {
-    memcpy(destData + footprint.Offset + i * footprint.Footprint.RowPitch,
-           srcData +
-               i * (img.width * 4), // Assuming 4 bytes per pixel tightly packed
-           img.width * 4);
-  }
-  m_meshTexUpload->Unmap(0, nullptr);
-
-  // 4. Command List Copy
-  // Reset command list? Or use the one we have?
-  // We are usually in "Initialize" phase here, where we execute a cmd list at
-  // the end? DxContext structure is a bit monolithic. Initialize executes
-  // things. BUT we are calling this from Main AFTER Initialize. We need to
-  // execute a command list to do the copy. For simplicity, let's just do a
-  // blocking copy here using the main command list.
-
-  // Wait... we can't just record and not execute if we expect it to be ready.
-  // Actually, we must transition the resource to generic read.
-
-  // Quick-and-dirty standalone command list execution for asset upload:
-  // Use frame 0's allocator for initialization
-  auto &alloc = m_frames[0].cmdAlloc;
-  ThrowIfFailed(alloc->Reset(), "CmdAlloc Reset failed");
-  ThrowIfFailed(m_cmdList->Reset(alloc.Get(), nullptr), "CmdList Reset failed");
-
-  D3D12_TEXTURE_COPY_LOCATION dst{};
-  dst.pResource = m_meshTex.Get();
-  dst.Type = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
-  dst.SubresourceIndex = 0;
-
-  D3D12_TEXTURE_COPY_LOCATION src{};
-  src.pResource = m_meshTexUpload.Get();
-  src.Type = D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT;
-  src.PlacedFootprint = footprint;
-
-  m_cmdList->CopyTextureRegion(&dst, 0, 0, 0, &src, nullptr);
-
-  D3D12_RESOURCE_BARRIER barrier{};
-  barrier.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
-  barrier.Transition.pResource = m_meshTex.Get();
-  barrier.Transition.StateBefore = D3D12_RESOURCE_STATE_COPY_DEST;
-  barrier.Transition.StateAfter = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
-  barrier.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
-  m_cmdList->ResourceBarrier(1, &barrier);
-
-  ThrowIfFailed(m_cmdList->Close(), "CmdList Close failed");
-  ID3D12CommandList *lists[] = {m_cmdList.Get()};
-  m_queue->ExecuteCommandLists(1, lists);
-  WaitForGpu(); // Flush to be safe and simple
-
-  // 5. Create SRV
-  D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc{};
-  srvDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
-  srvDesc.Format = tex.Format;
-  srvDesc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
-  srvDesc.Texture2D.MipLevels = 1;
-
-  D3D12_CPU_DESCRIPTOR_HANDLE cpuHandle = AllocMainSrvCpu(1);
-  m_device->CreateShaderResourceView(m_meshTex.Get(), &srvDesc, cpuHandle);
-  m_meshTexSrvGpu = MainSrvGpuFromCpu(cpuHandle);
-}
-
-void DxContext::DrawMesh(const DirectX::XMMATRIX &world,
+void DxContext::DrawMesh(uint32_t meshId, const DirectX::XMMATRIX &world,
                          const DirectX::XMMATRIX &view,
-                         const DirectX::XMMATRIX &proj) {
-  if (!m_meshPso || m_meshIndexCount == 0)
+                         const DirectX::XMMATRIX &proj,
+                         MeshLightingParams lighting, MeshShadowParams shadow) {
+  if (!m_meshRenderer)
     return;
+  m_meshRenderer->DrawMesh(*this, meshId, world, view, proj, lighting, shadow);
+}
 
-  auto cmd = m_cmdList.Get();
-  cmd->SetPipelineState(m_meshPso.Get());
-  cmd->SetGraphicsRootSignature(m_meshRootSig.Get());
+void DxContext::BeginShadowPass() {
+  if (!m_shadowMap)
+    return;
+  m_shadowMap->Begin(*this);
+}
 
-  // Ensure render targets are bound for draw calls (more robust than relying on Clear()).
-  auto rtv = CurrentRtv();
-  auto dsv = Dsv();
-  cmd->OMSetRenderTargets(1, &rtv, FALSE, &dsv);
+void DxContext::EndShadowPass() {
+  if (!m_shadowMap)
+    return;
+  m_shadowMap->End(*this);
+}
 
-  // Update scene constant buffer (re-using SceneCB structure, but we need to
-  // update it with THIS world matrix) Wait, SceneCB is per-frame and we map it
-  // once per frame usually? Just like DrawCubeWorld, we need to write to the
-  // CB. BUT we share the CB memory across calls in this simple engine?
-  // Actually, m_frames[i].sceneCb is one buffer. If we write to it multiple
-  // times in a frame, we overwrite previous draws! We need DYNAMIC CONSTANT
-  // BUFFERS (ring buffer) to support multiple objects properly. OR, we just use
-  // the same CB and assume we are drawing one object?
+void DxContext::DrawMeshShadow(uint32_t meshId, const DirectX::XMMATRIX &world,
+                               const DirectX::XMMATRIX &lightViewProj) {
+  if (!m_meshRenderer)
+    return;
+  m_meshRenderer->DrawMeshShadow(*this, meshId, world, lightViewProj);
+}
 
-  // DrawCubeWorld implementation check:
-  // It doesn't seem to implement dynamic update safely! It likely maps, writes,
-  // draws. If we draw multiple objects, the GPU might read the LAST write for
-  // ALL of them if we are not careful (race condition), OR if we execute the
-  // commands later. DX12 Command recording just records "Use address X". If we
-  // change content of X on CPU before GPU reads it, we get race. This tutorial
-  // engine is very simple.
+D3D12_GPU_DESCRIPTOR_HANDLE DxContext::ShadowSrvGpu() const {
+  if (!m_shadowMap)
+    return {};
+  return m_shadowMap->SrvGpu();
+}
 
-  // For now, let's just do what DrawCubeWorld does.
-  // It seems DrawCubeWorld isn't actually implemented in the file I read! I see
-  // CreateCubeResources but NOT DrawCubeWorld body? Let me check DrawCubeWorld
-  // definition if it exists.
-
-  // Re-calculating WVP
-  DirectX::XMMATRIX wvp = world * view * proj;
-  wvp = DirectX::XMMatrixTranspose(wvp);
-
-  // Map and write (UNSAFE for multiple draws, but okay for single draw specific
-  // test) To make it safe we needs a larger buffer and offsetting, usually 256
-  // byte aligned per object.
-
-  // Let's just assume we draw ONE mesh for now.
-  auto &frame = m_frames[m_frameIndex];
-  if (frame.sceneCbMapped) {
-    memcpy(frame.sceneCbMapped, &wvp, sizeof(DirectX::XMFLOAT4X4));
-  }
-
-  ID3D12DescriptorHeap *heaps[] = {m_mainSrvHeap.Get()};
-  cmd->SetDescriptorHeaps(1, heaps);
-
-  // Bind the per-frame SceneCB descriptor (created in
-  // CreateCubeResources/Initialize)
-  cmd->SetGraphicsRootDescriptorTable(0, frame.sceneCbGpu);
-
-  // Bind mesh texture SRV (t0). If no texture was created, sampling will be black.
-  // (Later we can add a default white texture.)
-  if (m_meshTexSrvGpu.ptr != 0)
-    cmd->SetGraphicsRootDescriptorTable(1, m_meshTexSrvGpu);
-
-  cmd->IASetVertexBuffers(0, 1, &m_meshVbView);
-  cmd->IASetIndexBuffer(&m_meshIbView);
-  cmd->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
-
-  cmd->DrawIndexedInstanced(m_meshIndexCount, 1, 0, 0, 0);
+uint32_t DxContext::ShadowMapSize() const {
+  if (!m_shadowMap)
+    return 0;
+  return m_shadowMap->Size();
 }
 
 void DxContext::CreateCommandObjects() {
@@ -546,6 +252,34 @@ void DxContext::CreateCommandObjects() {
 
   // Start closed; BeginFrame will Reset.
   ThrowIfFailed(m_cmdList->Close(), "CommandList Close failed");
+
+  // Per-frame constant buffer ring (upload heap).
+  D3D12_HEAP_PROPERTIES heapProps{};
+  heapProps.Type = D3D12_HEAP_TYPE_UPLOAD;
+
+  D3D12_RESOURCE_DESC resDesc{};
+  resDesc.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
+  resDesc.Width = kFrameConstantsBytes;
+  resDesc.Height = 1;
+  resDesc.DepthOrArraySize = 1;
+  resDesc.MipLevels = 1;
+  resDesc.SampleDesc.Count = 1;
+  resDesc.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
+
+  D3D12_RANGE range{0, 0};
+  for (uint32_t i = 0; i < FrameCount; ++i) {
+    ThrowIfFailed(m_device->CreateCommittedResource(
+                      &heapProps, D3D12_HEAP_FLAG_NONE, &resDesc,
+                      D3D12_RESOURCE_STATE_GENERIC_READ, nullptr,
+                      IID_PPV_ARGS(&m_frames[i].constants)),
+                  "CreateCommittedResource (FrameConstants) failed");
+    ThrowIfFailed(
+        m_frames[i].constants->Map(
+            0, &range,
+            reinterpret_cast<void **>(&m_frames[i].constantsMapped)),
+        "FrameConstants Map failed");
+    m_frames[i].constantsOffset = 0;
+  }
 }
 
 void DxContext::CreateSwapChain(HWND hwnd) {
@@ -658,6 +392,22 @@ void DxContext::CreateFence() {
 static ComPtr<ID3DBlob> CompileShader(const wchar_t *filePath,
                                       const char *entryPoint,
                                       const char *target) {
+  auto WideToUtf8 = [](const wchar_t *ws) -> std::string {
+    if (!ws)
+      return "(null)";
+    // len includes the null terminator because we pass -1.
+    int len =
+        WideCharToMultiByte(CP_UTF8, 0, ws, -1, nullptr, 0, nullptr, nullptr);
+    if (len <= 0)
+      return "(WideCharToMultiByte failed)";
+    // Allocate enough space for the null terminator, then strip it.
+    std::string out(static_cast<size_t>(len), '\0');
+    WideCharToMultiByte(CP_UTF8, 0, ws, -1, out.data(), len, nullptr, nullptr);
+    if (!out.empty() && out.back() == '\0')
+      out.pop_back();
+    return out;
+  };
+
   UINT flags = D3DCOMPILE_ENABLE_STRICTNESS;
 #if defined(_DEBUG)
   flags |= D3DCOMPILE_DEBUG | D3DCOMPILE_SKIP_OPTIMIZATION;
@@ -673,11 +423,29 @@ static ComPtr<ID3DBlob> CompileShader(const wchar_t *filePath,
 
   if (FAILED(hr)) {
     if (errors) {
-      std::string msg((const char *)errors->GetBufferPointer(),
+      std::string err((const char *)errors->GetBufferPointer(),
                       errors->GetBufferSize());
+      std::string msg = "Shader compile failed.\n";
+      msg += "File: ";
+      msg += WideToUtf8(filePath);
+      msg += "\nEntry: ";
+      msg += (entryPoint ? entryPoint : "(null)");
+      msg += "\nTarget: ";
+      msg += (target ? target : "(null)");
+      msg += "\n\n";
+      msg += err;
       throw std::runtime_error(msg);
     }
-    ThrowIfFailed(hr, "D3DCompileFromFile failed");
+    std::string msg = "D3DCompileFromFile failed.\n";
+    msg += "File: ";
+    msg += WideToUtf8(filePath);
+    msg += "\nEntry: ";
+    msg += (entryPoint ? entryPoint : "(null)");
+    msg += "\nTarget: ";
+    msg += (target ? target : "(null)");
+    msg += "\nHRESULT: ";
+    msg += WideToUtf8(HrToString(hr).c_str());
+    throw std::runtime_error(msg);
   }
 
   return bytecode;
@@ -1069,19 +837,11 @@ void DxContext::CreateTriangleResources() {
 }
 
 void DxContext::CreateCubeResources() {
-  // Root signature: descriptor table with 1 CBV (b0) for per-frame scene
-  // constants.
-  D3D12_DESCRIPTOR_RANGE range{};
-  range.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_CBV;
-  range.NumDescriptors = 1;
-  range.BaseShaderRegister = 0; // b0
-  range.RegisterSpace = 0;
-  range.OffsetInDescriptorsFromTableStart = 0;
-
+  // Root signature: root CBV at b0 (per-draw constants).
   D3D12_ROOT_PARAMETER param{};
-  param.ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
-  param.DescriptorTable.NumDescriptorRanges = 1;
-  param.DescriptorTable.pDescriptorRanges = &range;
+  param.ParameterType = D3D12_ROOT_PARAMETER_TYPE_CBV;
+  param.Descriptor.ShaderRegister = 0; // b0
+  param.Descriptor.RegisterSpace = 0;
   param.ShaderVisibility = D3D12_SHADER_VISIBILITY_VERTEX;
 
   D3D12_ROOT_SIGNATURE_DESC rsDesc{};
@@ -1173,44 +933,6 @@ void DxContext::CreateCubeResources() {
       m_device->CreateGraphicsPipelineState(&pso, IID_PPV_ARGS(&m_cubePso)),
       "CreateGraphicsPipelineState (cube) failed");
 
-  // Scene constant buffers: one per frame (to avoid CPU overwriting data while
-  // GPU is reading).
-  const UINT cbSize = Align256(sizeof(SceneCB));
-
-  D3D12_HEAP_PROPERTIES heapProps{};
-  heapProps.Type = D3D12_HEAP_TYPE_UPLOAD;
-
-  D3D12_RESOURCE_DESC resDesc{};
-  resDesc.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
-  resDesc.Width = cbSize;
-  resDesc.Height = 1;
-  resDesc.DepthOrArraySize = 1;
-  resDesc.MipLevels = 1;
-  resDesc.SampleDesc.Count = 1;
-  resDesc.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
-
-  D3D12_RANGE mapRange{0, 0};
-  for (uint32_t i = 0; i < FrameCount; ++i) {
-    ThrowIfFailed(m_device->CreateCommittedResource(
-                      &heapProps, D3D12_HEAP_FLAG_NONE, &resDesc,
-                      D3D12_RESOURCE_STATE_GENERIC_READ, nullptr,
-                      IID_PPV_ARGS(&m_frames[i].sceneCb)),
-                  "CreateCommittedResource (SceneCB per-frame) failed");
-
-    ThrowIfFailed(m_frames[i].sceneCb->Map(
-                      0, &mapRange,
-                      reinterpret_cast<void **>(&m_frames[i].sceneCbMapped)),
-                  "SceneCB Map failed");
-
-    D3D12_CONSTANT_BUFFER_VIEW_DESC cbv{};
-    cbv.BufferLocation = m_frames[i].sceneCb->GetGPUVirtualAddress();
-    cbv.SizeInBytes = cbSize;
-
-    D3D12_CPU_DESCRIPTOR_HANDLE cpu = AllocMainSrvCpu(1);
-    m_device->CreateConstantBufferView(&cbv, cpu);
-    m_frames[i].sceneCbGpu = MainSrvGpuFromCpu(cpu);
-  }
-
   // Cube geometry (upload heaps for simplicity).
   struct Vertex {
     float px, py, pz;
@@ -1241,6 +963,18 @@ void DxContext::CreateCubeResources() {
   const UINT vbSize = sizeof(verts);
   const UINT ibSize = sizeof(indices);
 
+  // Upload heap for geometry.
+  D3D12_HEAP_PROPERTIES heapProps{};
+  heapProps.Type = D3D12_HEAP_TYPE_UPLOAD;
+
+  D3D12_RESOURCE_DESC resDesc{};
+  resDesc.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
+  resDesc.Height = 1;
+  resDesc.DepthOrArraySize = 1;
+  resDesc.MipLevels = 1;
+  resDesc.SampleDesc.Count = 1;
+  resDesc.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
+
   D3D12_RESOURCE_DESC vbDesc = resDesc;
   vbDesc.Width = vbSize;
   ThrowIfFailed(m_device->CreateCommittedResource(
@@ -1250,6 +984,7 @@ void DxContext::CreateCubeResources() {
                 "CreateCommittedResource (CubeVB) failed");
 
   void *vbMapped = nullptr;
+  D3D12_RANGE mapRange{0, 0};
   ThrowIfFailed(m_cubeVB->Map(0, &mapRange, &vbMapped), "CubeVB Map failed");
   memcpy(vbMapped, verts, vbSize);
   m_cubeVB->Unmap(0, nullptr);
@@ -1472,6 +1207,26 @@ D3D12_CPU_DESCRIPTOR_HANDLE DxContext::Dsv() const {
   return m_dsvHeap->GetCPUDescriptorHandleForHeapStart();
 }
 
+D3D12_GPU_VIRTUAL_ADDRESS DxContext::AllocFrameConstants(uint32_t sizeBytes,
+                                                        void **outCpuPtr) {
+  if (!outCpuPtr)
+    throw std::runtime_error("AllocFrameConstants: outCpuPtr is null");
+
+  auto &fr = m_frames[m_frameIndex];
+  if (!fr.constants || !fr.constantsMapped)
+    throw std::runtime_error("AllocFrameConstants: constants buffer not ready");
+
+  const uint32_t aligned = Align256(sizeBytes);
+  if (fr.constantsOffset + aligned > kFrameConstantsBytes)
+    throw std::runtime_error("AllocFrameConstants: out of per-frame constants");
+
+  *outCpuPtr = fr.constantsMapped + fr.constantsOffset;
+  const D3D12_GPU_VIRTUAL_ADDRESS gpu =
+      fr.constants->GetGPUVirtualAddress() + fr.constantsOffset;
+  fr.constantsOffset += aligned;
+  return gpu;
+}
+
 D3D12_CPU_DESCRIPTOR_HANDLE DxContext::ImGuiFontCpuHandle() const {
   return m_imguiSrvHeap->GetCPUDescriptorHandleForHeapStart();
 }
@@ -1540,6 +1295,9 @@ void DxContext::BeginFrame() {
   ThrowIfFailed(
       m_cmdList->Reset(m_frames[m_frameIndex].cmdAlloc.Get(), nullptr),
       "CommandList Reset failed");
+
+  // Reset per-frame constants ring.
+  m_frames[m_frameIndex].constantsOffset = 0;
 
   // Transition backbuffer to render target.
   D3D12_RESOURCE_BARRIER b{};
@@ -1652,7 +1410,9 @@ void DxContext::DrawGridAxes(const DirectX::XMMATRIX &view,
 
   SceneCB cb{};
   XMStoreFloat4x4(&cb.worldViewProj, XMMatrixTranspose(wvp));
-  memcpy(m_frames[m_frameIndex].sceneCbMapped, &cb, sizeof(cb));
+  void *cbCpu = nullptr;
+  D3D12_GPU_VIRTUAL_ADDRESS cbGpu = AllocFrameConstants(sizeof(SceneCB), &cbCpu);
+  memcpy(cbCpu, &cb, sizeof(cb));
 
   D3D12_VIEWPORT vp{};
   vp.TopLeftX = 0.0f;
@@ -1671,8 +1431,7 @@ void DxContext::DrawGridAxes(const DirectX::XMMATRIX &view,
 
   ID3D12DescriptorHeap *heaps[] = {m_mainSrvHeap.Get()};
   m_cmdList->SetDescriptorHeaps(1, heaps);
-  m_cmdList->SetGraphicsRootDescriptorTable(0,
-                                            m_frames[m_frameIndex].sceneCbGpu);
+  m_cmdList->SetGraphicsRootConstantBufferView(0, cbGpu);
 
   m_cmdList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_LINELIST);
   m_cmdList->IASetVertexBuffers(0, 1, &m_gridVbView);
@@ -1697,7 +1456,9 @@ void DxContext::DrawCubeWorld(const DirectX::XMMATRIX &world,
 
   SceneCB cb{};
   XMStoreFloat4x4(&cb.worldViewProj, XMMatrixTranspose(wvp));
-  memcpy(m_frames[m_frameIndex].sceneCbMapped, &cb, sizeof(cb));
+  void *cbCpu = nullptr;
+  D3D12_GPU_VIRTUAL_ADDRESS cbGpu = AllocFrameConstants(sizeof(SceneCB), &cbCpu);
+  memcpy(cbCpu, &cb, sizeof(cb));
 
   D3D12_VIEWPORT vp{};
   vp.TopLeftX = 0.0f;
@@ -1717,8 +1478,7 @@ void DxContext::DrawCubeWorld(const DirectX::XMMATRIX &world,
   // Bind our main SRV heap and set root descriptor table to this frame's CBV.
   ID3D12DescriptorHeap *heaps[] = {m_mainSrvHeap.Get()};
   m_cmdList->SetDescriptorHeaps(1, heaps);
-  m_cmdList->SetGraphicsRootDescriptorTable(0,
-                                            m_frames[m_frameIndex].sceneCbGpu);
+  m_cmdList->SetGraphicsRootConstantBufferView(0, cbGpu);
 
   m_cmdList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
   m_cmdList->IASetVertexBuffers(0, 1, &m_cubeVbView);
