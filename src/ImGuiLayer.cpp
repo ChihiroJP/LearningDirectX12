@@ -89,6 +89,7 @@ void ImGuiLayer::DrawDebugWindow(const Camera& cam, float fps, float dtSeconds)
 {
     if (!m_initialized) return;
 
+    ImGui::SetNextWindowCollapsed(true, ImGuiCond_FirstUseEver);
     ImGui::Begin("Debug");
     ImGui::Text("FPS: %.1f", fps);
     ImGui::Text("dt: %.3f ms", dtSeconds * 1000.0f);

@@ -124,18 +124,99 @@ void Win32Window::SetMouseCaptured(bool captured)
     if (captured)
     {
         SetCapture(m_hwnd);
-        ShowCursor(FALSE);
+        // ShowCursor uses a counter — force it to -1 (hidden)
+        while (ShowCursor(FALSE) >= 0) {}
+        // Clip cursor to window
+        RECT clipRect;
+        GetClientRect(m_hwnd, &clipRect);
+        MapWindowPoints(m_hwnd, nullptr, reinterpret_cast<POINT*>(&clipRect), 2);
+        ClipCursor(&clipRect);
     }
     else
     {
         ReleaseCapture();
-        ShowCursor(TRUE);
+        ClipCursor(nullptr); // free cursor
+        // Force cursor counter to 0 (visible)
+        while (ShowCursor(TRUE) < 0) {}
+        // Center cursor on window for menu interaction
+        RECT r;
+        GetClientRect(m_hwnd, &r);
+        POINT center = {(r.right - r.left) / 2, (r.bottom - r.top) / 2};
+        ClientToScreen(m_hwnd, &center);
+        SetCursorPos(center.x, center.y);
     }
 }
 
 void Win32Window::SetImGuiEnabled(bool enabled)
 {
     m_imguiEnabled = enabled;
+}
+
+// ---- Fullscreen / resolution (Phase 12.6) ----
+
+void Win32Window::SetFullscreen(bool fullscreen)
+{
+    if (m_fullscreen == fullscreen)
+        return;
+
+    m_fullscreen = fullscreen;
+
+    if (m_fullscreen)
+    {
+        // Save current windowed position/size for later restore.
+        m_windowedPlacement.length = sizeof(WINDOWPLACEMENT);
+        GetWindowPlacement(m_hwnd, &m_windowedPlacement);
+
+        // Query the monitor this window sits on.
+        HMONITOR monitor = MonitorFromWindow(m_hwnd, MONITOR_DEFAULTTONEAREST);
+        MONITORINFO mi{};
+        mi.cbSize = sizeof(mi);
+        GetMonitorInfoW(monitor, &mi);
+
+        // Borderless style — no caption, no border.
+        SetWindowLongW(m_hwnd, GWL_STYLE, WS_POPUP | WS_VISIBLE);
+
+        const RECT& r = mi.rcMonitor;
+        SetWindowPos(m_hwnd, HWND_TOP,
+            r.left, r.top,
+            r.right - r.left, r.bottom - r.top,
+            SWP_FRAMECHANGED | SWP_NOACTIVATE);
+    }
+    else
+    {
+        // Restore windowed style.
+        SetWindowLongW(m_hwnd, GWL_STYLE, WS_OVERLAPPEDWINDOW | WS_VISIBLE);
+        SetWindowPlacement(m_hwnd, &m_windowedPlacement);
+        SetWindowPos(m_hwnd, nullptr, 0, 0, 0, 0,
+            SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER |
+            SWP_NOOWNERZORDER | SWP_FRAMECHANGED);
+    }
+}
+
+void Win32Window::SetWindowedResolution(uint32_t w, uint32_t h)
+{
+    // Exit fullscreen first if needed.
+    if (m_fullscreen)
+        SetFullscreen(false);
+
+    // Compute window rect from desired client size.
+    RECT r{0, 0, static_cast<LONG>(w), static_cast<LONG>(h)};
+    AdjustWindowRect(&r, WS_OVERLAPPEDWINDOW, FALSE);
+
+    const int winW = r.right - r.left;
+    const int winH = r.bottom - r.top;
+
+    // Center on the current monitor.
+    HMONITOR monitor = MonitorFromWindow(m_hwnd, MONITOR_DEFAULTTONEAREST);
+    MONITORINFO mi{};
+    mi.cbSize = sizeof(mi);
+    GetMonitorInfoW(monitor, &mi);
+
+    const int x = mi.rcWork.left + (mi.rcWork.right - mi.rcWork.left - winW) / 2;
+    const int y = mi.rcWork.top + (mi.rcWork.bottom - mi.rcWork.top - winH) / 2;
+
+    SetWindowPos(m_hwnd, nullptr, x, y, winW, winH,
+        SWP_NOZORDER | SWP_NOOWNERZORDER | SWP_FRAMECHANGED);
 }
 
 LRESULT CALLBACK Win32Window::WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
@@ -190,6 +271,12 @@ LRESULT Win32Window::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam)
         return 0;
     case WM_RBUTTONUP:
         if (m_input) m_input->OnKeyUp(VK_RBUTTON);
+        return 0;
+    case WM_MOUSEWHEEL:
+        if (m_input) {
+            float delta = static_cast<float>(GET_WHEEL_DELTA_WPARAM(wParam)) / WHEEL_DELTA;
+            m_input->AddScrollDelta(delta);
+        }
         return 0;
     case WM_INPUT:
     {

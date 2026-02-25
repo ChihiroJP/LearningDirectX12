@@ -21,7 +21,10 @@ FetchContent_Declare(
 # tinyexr's own CMakeLists builds a sample exe by default; disable it.
 set(TINYEXR_BUILD_SAMPLE OFF CACHE BOOL "" FORCE)
 set(TINYEXR_USE_MINIZ ON CACHE BOOL "" FORCE)
+# Suppress deprecation warning from tinyexr's old cmake_minimum_required(VERSION 3.5)
+set(CMAKE_WARN_DEPRECATED OFF CACHE BOOL "" FORCE)
 FetchContent_MakeAvailable(tinyexr)
+set(CMAKE_WARN_DEPRECATED ON CACHE BOOL "" FORCE)
 
 FetchContent_Declare(
     tinygltf
@@ -29,6 +32,21 @@ FetchContent_Declare(
     GIT_TAG v2.9.3
 )
 FetchContent_MakeAvailable(tinygltf)
+
+FetchContent_Declare(
+    nlohmann_json
+    GIT_REPOSITORY https://github.com/nlohmann/json.git
+    GIT_TAG v3.11.3
+)
+set(JSON_BuildTests OFF CACHE BOOL "" FORCE)
+FetchContent_MakeAvailable(nlohmann_json)
+
+FetchContent_Declare(
+    imguizmo
+    GIT_REPOSITORY https://github.com/CedricGuillemet/ImGuizmo.git
+    GIT_TAG master
+)
+FetchContent_MakeAvailable(imguizmo)
 
 add_library(imgui STATIC
     ${imgui_SOURCE_DIR}/imgui.cpp
@@ -38,10 +56,12 @@ add_library(imgui STATIC
     ${imgui_SOURCE_DIR}/imgui_demo.cpp
     ${imgui_SOURCE_DIR}/backends/imgui_impl_win32.cpp
     ${imgui_SOURCE_DIR}/backends/imgui_impl_dx12.cpp
+    ${imguizmo_SOURCE_DIR}/ImGuizmo.cpp
 )
 target_include_directories(imgui PUBLIC
     ${imgui_SOURCE_DIR}
     ${imgui_SOURCE_DIR}/backends
+    ${imguizmo_SOURCE_DIR}
 )
 if (MSVC)
     target_compile_options(imgui PRIVATE /W0)
@@ -70,6 +90,50 @@ add_executable(DX12Tutorial12 WIN32
     src/MeshRenderer.cpp
     src/GltfLoader.h
     src/GltfLoader.cpp
+    src/particle.h
+    src/particle.cpp
+    src/particle_test.h
+    src/particle_test.cpp
+    src/ParticleRenderer.h
+    src/ParticleRenderer.cpp
+    src/RenderPass.h
+    src/RenderPasses.h
+    src/RenderPasses.cpp
+    src/SkyRenderer.h
+    src/SkyRenderer.cpp
+    src/GridRenderer.h
+    src/GridRenderer.cpp
+    src/PostProcess.h
+    src/PostProcess.cpp
+    src/IBLGenerator.h
+    src/IBLGenerator.cpp
+    src/SSAORenderer.h
+    src/SSAORenderer.cpp
+    src/TerrainLOD.h
+    src/TerrainLOD.cpp
+    src/ProceduralMesh.h
+    src/ProceduralMesh.cpp
+    src/gridgame/GridGameState.h
+    src/gridgame/GridGame.h
+    src/gridgame/GridGame.cpp
+    src/gridgame/GridMap.h
+    src/gridgame/GridMap.cpp
+    src/gridgame/StageData.h
+    src/gridgame/StageData.cpp
+    src/gridgame/StageSerializer.h
+    src/gridgame/StageSerializer.cpp
+    src/gridgame/GridEditorCommands.h
+    src/engine/Entity.h
+    src/engine/Entity.cpp
+    src/engine/Scene.h
+    src/engine/Scene.cpp
+    src/engine/SceneEditor.h
+    src/engine/SceneEditor.cpp
+    src/engine/CommandHistory.h
+    src/engine/CommandHistory.cpp
+    src/engine/Commands.h
+    src/engine/GizmoController.h
+    src/engine/GizmoController.cpp
 )
 
 target_compile_definitions(DX12Tutorial12 PRIVATE
@@ -80,7 +144,7 @@ target_compile_definitions(DX12Tutorial12 PRIVATE
 )
 
 if (MSVC)
-    target_compile_options(DX12Tutorial12 PRIVATE /W4 /permissive-)
+    target_compile_options(DX12Tutorial12 PRIVATE /W4 /permissive- /utf-8)
 endif()
 
 target_link_libraries(DX12Tutorial12 PRIVATE
@@ -91,6 +155,7 @@ target_link_libraries(DX12Tutorial12 PRIVATE
     imgui
     tinyexr
     tinygltf
+    nlohmann_json::nlohmann_json
 )
 
 target_include_directories(DX12Tutorial12 PRIVATE

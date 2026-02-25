@@ -23,6 +23,10 @@ static float WrapPi(float a)
 
 void Camera::SetLens(float fovYRadians, float aspect, float nearZ, float farZ)
 {
+    m_fovY   = fovYRadians;
+    m_aspect = aspect;
+    m_nearZ  = nearZ;
+    m_farZ   = farZ;
     XMMATRIX P = XMMatrixPerspectiveFovLH(fovYRadians, aspect, nearZ, farZ);
     XMStoreFloat4x4(&m_proj, P);
 }
@@ -68,14 +72,14 @@ XMMATRIX Camera::View() const
     return XMMatrixLookAtLH(pos, target, up);
 }
 
-void Camera::Update(float dtSeconds, const Input& input, bool mouseLookEnabled)
+void Camera::Update(float dtSeconds, const Input& input, bool rightClickHeld)
 {
     const float dt = dtSeconds;
 
-    // Mouse look is applied by the caller via AddYawPitch() after consuming raw mouse deltas.
-    (void)mouseLookEnabled;
+    // WASD/QE movement only while holding right mouse button (editor-style).
+    if (!rightClickHeld)
+        return;
 
-    // Movement in camera space (WASD + QE).
     float fwd = 0.0f;
     float right = 0.0f;
     float up = 0.0f;
@@ -106,5 +110,76 @@ void Camera::Update(float dtSeconds, const Input& input, bool mouseLookEnabled)
 
     XMVECTOR pos = XMLoadFloat3(&m_pos) + delta;
     XMStoreFloat3(&m_pos, pos);
+}
+
+void Camera::ApplyScrollZoom(float scrollDelta)
+{
+    if (scrollDelta == 0.0f)
+        return;
+
+    XMVECTOR forward = XMVector3Normalize(XMVectorSet(
+        std::cos(m_pitch) * std::sin(m_yaw),
+        std::sin(m_pitch),
+        std::cos(m_pitch) * std::cos(m_yaw),
+        0.0f));
+
+    float zoomSpeed = m_moveSpeed * 2.0f;
+    XMVECTOR pos = XMLoadFloat3(&m_pos) + forward * (scrollDelta * zoomSpeed);
+    XMStoreFloat3(&m_pos, pos);
+}
+
+void Camera::UpdatePrevViewProj()
+{
+    XMMATRIX vp = View() * Proj();
+    XMStoreFloat4x4(&m_prevViewProj, vp);
+
+    // Store unjittered VP for TAA velocity computation.
+    XMMATRIX vpUnjittered = View() * ProjUnjittered();
+    XMStoreFloat4x4(&m_prevViewProjUnjittered, vpUnjittered);
+
+    m_hasPrevViewProj = true;
+}
+
+// ---- TAA jitter (Phase 10.4) ----
+
+static float Halton(int index, int base)
+{
+    float result = 0.0f;
+    float f = 1.0f;
+    int i = index;
+    while (i > 0) {
+        f /= static_cast<float>(base);
+        result += f * (i % base);
+        i /= base;
+    }
+    return result;
+}
+
+void Camera::AdvanceJitter(uint32_t screenWidth, uint32_t screenHeight)
+{
+    // Store unjittered projection (always, even when jitter is disabled).
+    XMMATRIX P = XMMatrixPerspectiveFovLH(m_fovY, m_aspect, m_nearZ, m_farZ);
+    XMStoreFloat4x4(&m_projUnjittered, P);
+
+    if (!m_jitterEnabled) {
+        m_jitterX = 0.0f;
+        m_jitterY = 0.0f;
+        XMStoreFloat4x4(&m_proj, P);
+        return;
+    }
+
+    // 16-sample Halton(2,3) sequence, centered around 0.
+    m_frameCount++;
+    int idx = static_cast<int>((m_frameCount % 16) + 1);
+    m_jitterX = Halton(idx, 2) - 0.5f; // [-0.5, 0.5] in pixel units
+    m_jitterY = Halton(idx, 3) - 0.5f;
+
+    // Apply sub-pixel offset to projection matrix.
+    // Offset in NDC = jitterPixels * 2.0 / screenDimension
+    XMFLOAT4X4 p;
+    XMStoreFloat4x4(&p, P);
+    p._31 += m_jitterX * 2.0f / static_cast<float>(screenWidth);
+    p._32 += m_jitterY * 2.0f / static_cast<float>(screenHeight);
+    m_proj = p;
 }
 

@@ -1,6 +1,10 @@
 #include "GltfLoader.h"
+#include <cmath>
 #include <iostream>
 #include <stdexcept>
+
+// stb_image is compiled inside tinygltf; we only need the header for stbi_load.
+#include "stb_image.h"
 
 // IMPORTANT:
 // We link against the `tinygltf` library via CMake. Do NOT compile the
@@ -153,6 +157,88 @@ static LoadedImage ConvertToRgba(const tinygltf::Image &img) {
   return out;
 }
 
+// Compute tangents from UV-based per-triangle method (Lengyel's method).
+// Fallback when glTF does not provide TANGENT attribute.
+// NOTE: For production use, MikkTSpace is the standard. This is simpler and
+// adequate for learning.
+static void ComputeTangents(LoadedMesh &mesh) {
+  const size_t vertCount = mesh.vertices.size();
+  const size_t idxCount = mesh.indices.size();
+
+  // Accumulate tangent per vertex.
+  std::vector<float> tanAccum(vertCount * 3, 0.0f);
+
+  for (size_t i = 0; i + 2 < idxCount; i += 3) {
+    const uint16_t i0 = mesh.indices[i + 0];
+    const uint16_t i1 = mesh.indices[i + 1];
+    const uint16_t i2 = mesh.indices[i + 2];
+
+    const auto &v0 = mesh.vertices[i0];
+    const auto &v1 = mesh.vertices[i1];
+    const auto &v2 = mesh.vertices[i2];
+
+    float e1x = v1.pos[0] - v0.pos[0];
+    float e1y = v1.pos[1] - v0.pos[1];
+    float e1z = v1.pos[2] - v0.pos[2];
+
+    float e2x = v2.pos[0] - v0.pos[0];
+    float e2y = v2.pos[1] - v0.pos[1];
+    float e2z = v2.pos[2] - v0.pos[2];
+
+    float du1 = v1.uv[0] - v0.uv[0];
+    float dv1 = v1.uv[1] - v0.uv[1];
+    float du2 = v2.uv[0] - v0.uv[0];
+    float dv2 = v2.uv[1] - v0.uv[1];
+
+    float det = du1 * dv2 - du2 * dv1;
+    if (std::abs(det) < 1e-8f)
+      det = 1.0f; // degenerate UV, use identity
+    float invDet = 1.0f / det;
+
+    float tx = (dv2 * e1x - dv1 * e2x) * invDet;
+    float ty = (dv2 * e1y - dv1 * e2y) * invDet;
+    float tz = (dv2 * e1z - dv1 * e2z) * invDet;
+
+    // Accumulate for all 3 vertices of the triangle.
+    for (uint16_t idx : {i0, i1, i2}) {
+      tanAccum[idx * 3 + 0] += tx;
+      tanAccum[idx * 3 + 1] += ty;
+      tanAccum[idx * 3 + 2] += tz;
+    }
+  }
+
+  // Normalize accumulated tangents and store. w=1.0 (right-handed assumption).
+  for (size_t v = 0; v < vertCount; ++v) {
+    float tx = tanAccum[v * 3 + 0];
+    float ty = tanAccum[v * 3 + 1];
+    float tz = tanAccum[v * 3 + 2];
+    float len = std::sqrt(tx * tx + ty * ty + tz * tz);
+    if (len > 1e-8f) {
+      mesh.vertices[v].tangent[0] = tx / len;
+      mesh.vertices[v].tangent[1] = ty / len;
+      mesh.vertices[v].tangent[2] = tz / len;
+    } else {
+      // Degenerate: fall back to +X.
+      mesh.vertices[v].tangent[0] = 1.0f;
+      mesh.vertices[v].tangent[1] = 0.0f;
+      mesh.vertices[v].tangent[2] = 0.0f;
+    }
+    mesh.vertices[v].tangent[3] = 1.0f;
+  }
+}
+
+// Helper: extract a texture image from a glTF material texture reference.
+static LoadedImage ExtractTextureImage(const tinygltf::Model &model,
+                                       int textureIndex) {
+  LoadedImage result{};
+  if (textureIndex < 0 || textureIndex >= static_cast<int>(model.textures.size()))
+    return result;
+  const int srcImg = model.textures[textureIndex].source;
+  if (srcImg < 0 || srcImg >= static_cast<int>(model.images.size()))
+    return result;
+  return ConvertToRgba(model.images[srcImg]);
+}
+
 bool GltfLoader::LoadModel(const std::string &path) {
   tinygltf::Model model;
   tinygltf::TinyGLTF loader;
@@ -222,6 +308,19 @@ bool GltfLoader::LoadModel(const std::string &path) {
     }
   }
 
+  // TANGENT (vec4: xyz = tangent direction, w = handedness)
+  const float *tanData = nullptr;
+  size_t tanStride = 0;
+  bool hasTangents = false;
+  if (prim.attributes.find("TANGENT") != prim.attributes.end()) {
+    const int tanIdx = prim.attributes.at("TANGENT");
+    if (tanIdx >= 0 && tanIdx < static_cast<int>(model.accessors.size())) {
+      const auto &tanAcc = model.accessors[tanIdx];
+      hasTangents = GetAccessorFloatData(model, tanAcc, TINYGLTF_TYPE_VEC4,
+                                         tanData, tanStride);
+    }
+  }
+
   // INDICES
   if (prim.indices < 0)
     return false;
@@ -266,10 +365,24 @@ bool GltfLoader::LoadModel(const std::string &path) {
       m_mesh.vertices[i].uv[0] = 0.0f;
       m_mesh.vertices[i].uv[1] = 0.0f;
     }
+
+    if (hasTangents && tanData) {
+      const float *t = reinterpret_cast<const float *>(
+          reinterpret_cast<const uint8_t *>(tanData) + i * tanStride);
+      m_mesh.vertices[i].tangent[0] = t[0];
+      m_mesh.vertices[i].tangent[1] = t[1];
+      m_mesh.vertices[i].tangent[2] = t[2];
+      m_mesh.vertices[i].tangent[3] = t[3]; // handedness
+    } else {
+      // Will be computed below if not present.
+      m_mesh.vertices[i].tangent[0] = 1.0f;
+      m_mesh.vertices[i].tangent[1] = 0.0f;
+      m_mesh.vertices[i].tangent[2] = 0.0f;
+      m_mesh.vertices[i].tangent[3] = 1.0f;
+    }
   }
 
   // Indices (handling format)
-  // Supports unsigned byte (5121), unsigned short (5123) or unsigned int (5125)
   m_mesh.indices.reserve(idxAcc.count);
   m_mesh.indices.clear();
   for (size_t i = 0; i < idxAcc.count; ++i) {
@@ -285,36 +398,141 @@ bool GltfLoader::LoadModel(const std::string &path) {
     m_mesh.indices.push_back(static_cast<uint16_t>(idx));
   }
 
+  // Compute tangents from UVs if glTF didn't provide them.
+  if (!hasTangents) {
+    ComputeTangents(m_mesh);
+    std::cout << "Computed tangents from UVs (glTF had no TANGENT attribute).\n";
+  }
+
   std::cout << "Extracted " << m_mesh.vertices.size() << " vertices, "
             << m_mesh.indices.size() << " indices.\n";
 
-  // Phase 5.5: Extract the material's baseColor texture (albedo) image.
-  // This avoids accidentally using the normal map (purple) as the "diffuse".
+  // ---- Extract material textures ----
   m_baseColorImage = {};
-  int imageIndex = -1;
+  m_normalImage = {};
+  m_metalRoughImage = {};
+  m_aoImage = {};
+  m_emissiveImage = {};
+  m_emissiveFactor[0] = m_emissiveFactor[1] = m_emissiveFactor[2] = 0.0f;
 
   if (prim.material >= 0 && prim.material < static_cast<int>(model.materials.size())) {
     const auto &mat = model.materials[prim.material];
-    const int texIndex = mat.pbrMetallicRoughness.baseColorTexture.index;
-    if (texIndex >= 0 && texIndex < static_cast<int>(model.textures.size())) {
-      const int srcImg = model.textures[texIndex].source;
+
+    // BaseColor texture
+    int imageIndex = -1;
+    const int bcTexIndex = mat.pbrMetallicRoughness.baseColorTexture.index;
+    if (bcTexIndex >= 0 && bcTexIndex < static_cast<int>(model.textures.size())) {
+      const int srcImg = model.textures[bcTexIndex].source;
       if (srcImg >= 0 && srcImg < static_cast<int>(model.images.size()))
         imageIndex = srcImg;
     }
-  }
+    // Fallback: if there is no baseColor texture specified, just pick image[0].
+    if (imageIndex < 0 && !model.images.empty())
+      imageIndex = 0;
+    if (imageIndex >= 0 && imageIndex < static_cast<int>(model.images.size())) {
+      m_baseColorImage = ConvertToRgba(model.images[imageIndex]);
+      std::cout << "BaseColor Image: " << model.images[imageIndex].width << "x"
+                << model.images[imageIndex].height << " ("
+                << model.images[imageIndex].component << " -> RGBA)\n";
+    } else {
+      std::cout << "No baseColor texture image found in glTF.\n";
+    }
 
-  // Fallback: if there is no baseColor texture specified, just pick image[0].
-  if (imageIndex < 0 && !model.images.empty())
-    imageIndex = 0;
+    // Normal map texture
+    const int normTexIndex = mat.normalTexture.index;
+    m_normalImage = ExtractTextureImage(model, normTexIndex);
+    if (!m_normalImage.pixels.empty())
+      std::cout << "Normal map: " << m_normalImage.width << "x" << m_normalImage.height << "\n";
 
-  if (imageIndex >= 0 && imageIndex < static_cast<int>(model.images.size())) {
-    const auto &img = model.images[imageIndex];
-    m_baseColorImage = ConvertToRgba(img);
-    std::cout << "BaseColor Image: " << img.width << "x" << img.height << " ("
-              << img.component << " -> RGBA)\n";
+    // MetallicRoughness texture (glTF: G=roughness, B=metallic)
+    const int mrTexIndex = mat.pbrMetallicRoughness.metallicRoughnessTexture.index;
+    m_metalRoughImage = ExtractTextureImage(model, mrTexIndex);
+    if (!m_metalRoughImage.pixels.empty())
+      std::cout << "MetalRough map: " << m_metalRoughImage.width << "x" << m_metalRoughImage.height << "\n";
+
+    // Occlusion (AO) texture
+    const int aoTexIndex = mat.occlusionTexture.index;
+    m_aoImage = ExtractTextureImage(model, aoTexIndex);
+    if (!m_aoImage.pixels.empty())
+      std::cout << "AO map: " << m_aoImage.width << "x" << m_aoImage.height << "\n";
+
+    // Emissive texture + factor
+    const int emTexIndex = mat.emissiveTexture.index;
+    m_emissiveImage = ExtractTextureImage(model, emTexIndex);
+    if (!m_emissiveImage.pixels.empty())
+      std::cout << "Emissive map: " << m_emissiveImage.width << "x" << m_emissiveImage.height << "\n";
+
+    if (mat.emissiveFactor.size() >= 3) {
+      m_emissiveFactor[0] = static_cast<float>(mat.emissiveFactor[0]);
+      m_emissiveFactor[1] = static_cast<float>(mat.emissiveFactor[1]);
+      m_emissiveFactor[2] = static_cast<float>(mat.emissiveFactor[2]);
+    }
+
+    // Phase 11.5: populate Material struct from glTF scalars
+    const auto &bcf = mat.pbrMetallicRoughness.baseColorFactor;
+    if (bcf.size() >= 4) {
+      m_material.baseColorFactor = {
+        static_cast<float>(bcf[0]), static_cast<float>(bcf[1]),
+        static_cast<float>(bcf[2]), static_cast<float>(bcf[3])};
+    }
+    m_material.metallicFactor  = static_cast<float>(mat.pbrMetallicRoughness.metallicFactor);
+    m_material.roughnessFactor = static_cast<float>(mat.pbrMetallicRoughness.roughnessFactor);
+    m_material.emissiveFactor  = {m_emissiveFactor[0], m_emissiveFactor[1], m_emissiveFactor[2]};
+
+    // Texture presence flags
+    m_material.hasBaseColor  = !m_baseColorImage.pixels.empty();
+    m_material.hasNormal     = !m_normalImage.pixels.empty();
+    m_material.hasMetalRough = !m_metalRoughImage.pixels.empty();
+    m_material.hasAO         = !m_aoImage.pixels.empty();
+    m_material.hasEmissive   = !m_emissiveImage.pixels.empty();
+    // hasHeight set later in LoadHeightMap()
   } else {
-    std::cout << "No baseColor texture image found in glTF.\n";
+    // No material: try image[0] as baseColor fallback.
+    if (!model.images.empty()) {
+      m_baseColorImage = ConvertToRgba(model.images[0]);
+      std::cout << "No material; using image[0] as baseColor.\n";
+    }
   }
 
+  return true;
+}
+
+bool GltfLoader::LoadHeightMap(const std::string &path) {
+  m_heightImage = {};
+
+  int w = 0, h = 0, c = 0;
+  unsigned char *data = stbi_load(path.c_str(), &w, &h, &c, 4); // force RGBA
+  if (!data) {
+    std::cerr << "Failed to load height map: " << path << "\n";
+    return false;
+  }
+
+  m_heightImage.width = w;
+  m_heightImage.height = h;
+  m_heightImage.channels = 4;
+  m_heightImage.pixels.assign(data, data + static_cast<size_t>(w) * h * 4);
+  stbi_image_free(data);
+
+  m_material.hasHeight = true;
+
+  std::cout << "Height map: " << w << "x" << h << " (" << c << " -> RGBA)\n";
+  return true;
+}
+
+// ---- Standalone image loader (for editor texture slot assignment) ----
+
+bool LoadImageFile(const std::string &path, LoadedImage &outImage) {
+  outImage = {};
+  int w = 0, h = 0, c = 0;
+  unsigned char *data = stbi_load(path.c_str(), &w, &h, &c, 4); // force RGBA
+  if (!data) {
+    std::cerr << "Failed to load image: " << path << "\n";
+    return false;
+  }
+  outImage.width = w;
+  outImage.height = h;
+  outImage.channels = 4;
+  outImage.pixels.assign(data, data + static_cast<size_t>(w) * h * 4);
+  stbi_image_free(data);
   return true;
 }

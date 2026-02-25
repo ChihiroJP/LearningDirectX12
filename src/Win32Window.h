@@ -47,6 +47,11 @@ public:
     // ImGui Win32 backend needs to see messages first.
     void SetImGuiEnabled(bool enabled);
 
+    // Fullscreen / resolution (Phase 12.6)
+    void SetFullscreen(bool fullscreen);
+    void SetWindowedResolution(uint32_t w, uint32_t h);
+    bool IsFullscreen() const { return m_fullscreen; }
+
 private:
     static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam);
     LRESULT HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam);
@@ -65,5 +70,9 @@ private:
     Input* m_input = nullptr;
 
     bool m_imguiEnabled = false;
+
+    // Fullscreen state (Phase 12.6)
+    bool m_fullscreen = false;
+    WINDOWPLACEMENT m_windowedPlacement{};
 };
 

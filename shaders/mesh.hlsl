@@ -1,52 +1,98 @@
 cbuffer MeshCB : register(b0)
 {
-    float4x4 gWorldViewProj;
-    float4x4 gWorld;
+    float4x4 gView;                // view matrix (for SSAO view-space normals)
+    float4x4 gProj;                // projection matrix
     float4   gCameraPos;           // xyz
     float4   gLightDirIntensity;   // xyz = direction of sun rays, w = intensity
-    float4   gLightColorRoughness; // rgb = color, w = roughness
-    float4   gMetallicPad;         // x = metallic
-    float4x4 gLightViewProj;       // world -> light clip (shadow map)
+    float4   gLightColorRoughness; // rgb = color, w = roughness (fallback)
+    float4   gMetallicPad;         // x = metallic (fallback), y = iblIntensity, z = cascadeDebug
+    float4x4 gCascadeLightViewProj[4]; // per-cascade world -> light clip
     float4   gShadowParams;        // xy = texelSize, z = bias, w = strength
+    float4   gCascadeSplits;       // xyz = split distances (view-space), w = cascadeCount
+    float4   gEmissiveFactor;      // rgb = emissive factor, w = unused
+    float4   gPOMParams;          // x = heightScale, y = minLayers, z = maxLayers, w = enabled
+    float4   gBaseColorFactor;    // rgba multiplier for base color
+    float4   gUVTilingOffset;     // xy=tiling, zw=offset
 };
+
+// Per-instance world matrices (Phase 12.5 — Instanced Rendering).
+StructuredBuffer<float4x4> gInstanceWorlds : register(t10);
 
 struct VSIn
 {
     float3 pos      : POSITION;
     float3 normal   : NORMAL;
     float2 uv       : TEXCOORD;
+    float4 tangent  : TANGENT;   // xyz = tangent dir, w = handedness
 };
 
 struct PSIn
 {
-    float4 pos    : SV_POSITION;
-    float3 nrmW   : TEXCOORD1;
-    float2 uv     : TEXCOORD0;
-    float3 posW   : TEXCOORD2;
+    float4 pos       : SV_POSITION;
+    float3 nrmW      : TEXCOORD1;
+    float2 uv        : TEXCOORD0;
+    float3 posW      : TEXCOORD2;
+    float  viewZ     : TEXCOORD3; // view-space depth for cascade selection
+    float3 tangentW  : TEXCOORD4;
+    float  tangentW_w: TEXCOORD5; // handedness
 };
 
-PSIn VSMain(VSIn v)
+// MRT output: HDR color + view-space normal for SSAO.
+struct PSOut
 {
+    float4 color    : SV_TARGET0;
+    float4 normalVS : SV_TARGET1;
+};
+
+PSIn VSMain(VSIn v, uint instId : SV_InstanceID)
+{
+    float4x4 world = gInstanceWorlds[instId];
+    float4x4 wvp = mul(world, mul(gView, gProj));
+
     PSIn o;
-    o.pos = mul(float4(v.pos, 1.0f), gWorldViewProj);
-    float4 posW = mul(float4(v.pos, 1.0f), gWorld);
+    o.pos = mul(float4(v.pos, 1.0f), wvp);
+    float4 posW = mul(float4(v.pos, 1.0f), world);
     o.posW = posW.xyz;
-    o.nrmW = mul(float4(v.normal, 0.0f), gWorld).xyz;
+    o.nrmW = mul(float4(v.normal, 0.0f), world).xyz;
     o.uv = v.uv;
+    // For LH perspective, clip w == view-space Z.
+    o.viewZ = o.pos.w;
+    // Transform tangent to world space (direction only, no translation).
+    o.tangentW = mul(float4(v.tangent.xyz, 0.0f), world).xyz;
+    o.tangentW_w = v.tangent.w;
     return o;
 }
 
-Texture2D gDiffMap : register(t0);
-SamplerState gSam  : register(s0);
+// Material textures (t0-t5).
+Texture2D gBaseColorMap   : register(t0);
+Texture2D gNormalMap      : register(t1);
+Texture2D gMetalRoughMap  : register(t2);
+Texture2D gAOMap          : register(t3);
+Texture2D gEmissiveMap    : register(t4);
+Texture2D gHeightMap      : register(t5);
+SamplerState gSam         : register(s0);
 
-Texture2D<float> gShadowMap : register(t1);
+// Shadow map (t6).
+Texture2DArray<float> gShadowMap : register(t6);
 SamplerComparisonState gShadowSamp : register(s1);
+
+// IBL textures (t7-t9).
+TextureCube<float4> gIrradianceMap  : register(t7);
+TextureCube<float4> gPrefilteredMap : register(t8);
+Texture2D<float2>   gBrdfLUT       : register(t9);
+SamplerState        gIBLSampler    : register(s2);
 
 static const float PI = 3.14159265f;
 
 float3 FresnelSchlick(float cosTheta, float3 F0)
 {
     return F0 + (1.0f - F0) * pow(1.0f - cosTheta, 5.0f);
+}
+
+float3 FresnelSchlickRoughness(float cosTheta, float3 F0, float roughness)
+{
+    float3 maxR = max((1.0f - roughness).xxx, F0);
+    return F0 + (maxR - F0) * pow(1.0f - cosTheta, 5.0f);
 }
 
 float DistributionGGX(float NdotH, float roughness)
@@ -70,16 +116,83 @@ float GeometrySmith(float NdotV, float NdotL, float roughness)
            GeometrySchlickGGX(NdotL, roughness);
 }
 
-float4 PSMain(PSIn i) : SV_TARGET
+// Parallax Occlusion Mapping: ray-march through height field to find offset UV.
+// Uses SampleLevel (mip 0) inside the loop to avoid gradient issues in dynamic branches.
+float2 ParallaxOcclusionMap(float2 uv, float3 viewDirTS, float heightScale,
+                            float minLayers, float maxLayers)
 {
-    // BaseColor sampled as SRGB view => returned as LINEAR here.
-    float3 albedo = gDiffMap.Sample(gSam, i.uv).rgb;
+    // More layers at grazing angles where parallax is most visible.
+    float numLayers = lerp(maxLayers, minLayers, abs(viewDirTS.z));
+    float layerDepth = 1.0f / numLayers;
+    float currentLayerDepth = 0.0f;
 
-    float roughness = saturate(gLightColorRoughness.w);
-    roughness = max(roughness, 0.045f);
-    float metallic = saturate(gMetallicPad.x);
+    // UV offset per layer: project view dir onto surface plane.
+    float2 P = viewDirTS.xy * heightScale;
+    float2 deltaUV = P / numLayers;
 
+    float2 currentUV = uv;
+    float currentHeight = 1.0f - gHeightMap.SampleLevel(gSam, currentUV, 0).r;
+
+    // Step through layers until ray goes below the height field.
+    [loop]
+    for (int step = 0; step < (int)maxLayers; ++step)
+    {
+        if (currentLayerDepth >= currentHeight)
+            break;
+        currentUV -= deltaUV;
+        currentHeight = 1.0f - gHeightMap.SampleLevel(gSam, currentUV, 0).r;
+        currentLayerDepth += layerDepth;
+    }
+
+    // Linear interpolation between last two samples for sub-step precision.
+    float2 prevUV = currentUV + deltaUV;
+    float afterDepth  = currentHeight - currentLayerDepth;
+    float beforeDepth = (1.0f - gHeightMap.SampleLevel(gSam, prevUV, 0).r)
+                        - (currentLayerDepth - layerDepth);
+    float weight = afterDepth / (afterDepth - beforeDepth);
+    return lerp(currentUV, prevUV, weight);
+}
+
+PSOut PSMain(PSIn i)
+{
+    // ---- TBN normal mapping ----
     float3 N = normalize(i.nrmW);
+    float3 T = normalize(i.tangentW);
+    // Gram-Schmidt re-orthogonalize T against N.
+    T = normalize(T - dot(T, N) * N);
+    float3 B = cross(N, T) * i.tangentW_w; // handedness
+    float3x3 TBN = float3x3(T, B, N);
+
+    // ---- UV tiling/offset ----
+    float2 uv = i.uv * gUVTilingOffset.xy + gUVTilingOffset.zw;
+
+    // ---- Parallax Occlusion Mapping (UV offset) ----
+    if (gPOMParams.w > 0.5f)
+    {
+        float3 V_world = normalize(gCameraPos.xyz - i.posW);
+        // Transform view direction to tangent space (TBN rows = T, B, N).
+        float3 viewDirTS = normalize(float3(dot(V_world, T), dot(V_world, B), dot(V_world, N)));
+        uv = ParallaxOcclusionMap(uv, viewDirTS, gPOMParams.x, gPOMParams.y, gPOMParams.z);
+    }
+
+    // Sample normal map (tangent-space). Default flat normal = (0,0,1).
+    float3 normalTS = gNormalMap.Sample(gSam, uv).rgb * 2.0f - 1.0f;
+    N = normalize(mul(normalTS, TBN));
+
+    // ---- Sample material textures ----
+    // BaseColor sampled as SRGB view => returned as LINEAR here.
+    float3 albedo = gBaseColorMap.Sample(gSam, uv).rgb * gBaseColorFactor.rgb;
+
+    // MetallicRoughness: glTF convention — G=roughness, B=metallic.
+    // Multiply by per-material factors (Phase 11.5) so sliders scale the texture.
+    float4 mr = gMetalRoughMap.Sample(gSam, uv);
+    float roughness = saturate(mr.g * gLightColorRoughness.w);
+    roughness = max(roughness, 0.045f);
+    float metallic = saturate(mr.b * gMetallicPad.x);
+
+    // AO texture (single channel, applied to ambient only).
+    float ao = gAOMap.Sample(gSam, uv).r;
+
     float3 V = normalize(gCameraPos.xyz - i.posW);
 
     // Directional light: store "sun rays direction" (direction light travels).
@@ -108,17 +221,31 @@ float4 PSMain(PSIn i) : SV_TARGET
 
     float3 color = (diff + spec) * lightColor * NdotL;
 
-    // Shadows v1: sample shadow map with basic 3x3 PCF.
+    // CSM: select cascade by view-space depth and sample shadow map array.
     float shadowFactor = 1.0f;
     if (gShadowParams.w > 0.0f && gShadowParams.x > 0.0f) {
-        float4 posLS = mul(float4(i.posW, 1.0f), gLightViewProj);
+        int cascadeCount = (int)gCascadeSplits.w;
+        float viewZ = i.viewZ;
+
+        // Select cascade: first one whose split distance exceeds our depth.
+        int cascade = cascadeCount - 1;
+        float splitDists[3] = { gCascadeSplits.x, gCascadeSplits.y, gCascadeSplits.z };
+        for (int c = 0; c < cascadeCount; ++c) {
+            if (viewZ < splitDists[c]) {
+                cascade = c;
+                break;
+            }
+        }
+
+        // Transform world position to this cascade's light clip space.
+        float4 posLS = mul(float4(i.posW, 1.0f), gCascadeLightViewProj[cascade]);
         float3 ndc = posLS.xyz / posLS.w;
 
-        float2 uv = float2(ndc.x * 0.5f + 0.5f, -ndc.y * 0.5f + 0.5f);
+        float2 shadowUV = float2(ndc.x * 0.5f + 0.5f, -ndc.y * 0.5f + 0.5f);
         float depth = ndc.z;
 
         // Outside the shadow map / light frustum => treat as lit.
-        if (uv.x >= 0.0f && uv.x <= 1.0f && uv.y >= 0.0f && uv.y <= 1.0f &&
+        if (shadowUV.x >= 0.0f && shadowUV.x <= 1.0f && shadowUV.y >= 0.0f && shadowUV.y <= 1.0f &&
             depth >= 0.0f && depth <= 1.0f) {
             float2 texel = gShadowParams.xy;
             float bias = gShadowParams.z;
@@ -129,7 +256,10 @@ float4 PSMain(PSIn i) : SV_TARGET
                 [unroll]
                 for (int x = -1; x <= 1; ++x) {
                     float2 o = float2((float)x, (float)y) * texel;
-                    sum += gShadowMap.SampleCmpLevelZero(gShadowSamp, uv + o, depth - bias);
+                    sum += gShadowMap.SampleCmpLevelZero(
+                        gShadowSamp,
+                        float3(shadowUV + o, (float)cascade),
+                        depth - bias);
                 }
             }
             float shadow = sum / 9.0f; // 0..1 visibility
@@ -140,10 +270,50 @@ float4 PSMain(PSIn i) : SV_TARGET
     // Apply shadows only to direct lighting (ambient stays).
     color *= shadowFactor;
 
-    // Tiny ambient until we add IBL.
-    color += albedo * 0.02f;
+    // Debug: tint by cascade index (toggle via gMetallicPad.z).
+    if (gMetallicPad.z > 0.5f && gShadowParams.w > 0.0f) {
+        int cascadeCount = (int)gCascadeSplits.w;
+        float viewZ = i.viewZ;
+        int cascade = cascadeCount - 1;
+        float splitDists[3] = { gCascadeSplits.x, gCascadeSplits.y, gCascadeSplits.z };
+        for (int c = 0; c < cascadeCount; ++c) {
+            if (viewZ < splitDists[c]) { cascade = c; break; }
+        }
+        float3 cascadeColors[4] = {
+            float3(1,0.2,0.2), float3(0.2,1,0.2),
+            float3(0.2,0.2,1), float3(1,1,0.2)
+        };
+        color = lerp(color, cascadeColors[cascade], 0.3f);
+    }
 
-    // Gamma encode for UNORM backbuffer.
-    color = pow(max(color, 0.0f), 1.0f / 2.2f);
-    return float4(color, 1.0f);
+    // IBL ambient (split-sum approximation). Apply AO to ambient only.
+    {
+        float3 F0_ibl = lerp(float3(0.04f, 0.04f, 0.04f), albedo, metallic);
+        float3 kS_ibl = FresnelSchlickRoughness(max(NdotV, 0.0f), F0_ibl, roughness);
+        float3 kD_ibl = (1.0f - kS_ibl) * (1.0f - metallic);
+
+        float3 irradiance  = gIrradianceMap.Sample(gIBLSampler, N).rgb;
+        float3 diffuseIBL  = kD_ibl * albedo * irradiance;
+
+        float3 R = reflect(-V, N);
+        float3 prefilteredColor = gPrefilteredMap.SampleLevel(gIBLSampler, R, roughness * 4.0f).rgb;
+        float2 brdf = gBrdfLUT.Sample(gIBLSampler, float2(max(NdotV, 0.0f), roughness)).rg;
+        float3 specularIBL = prefilteredColor * (F0_ibl * brdf.x + brdf.y);
+
+        float iblIntensity = gMetallicPad.y;
+        color += (diffuseIBL + specularIBL) * iblIntensity * ao;
+    }
+
+    // Emissive: add before tonemap so bloom picks it up.
+    {
+        float3 emissive = gEmissiveMap.Sample(gSam, uv).rgb;
+        color += emissive * gEmissiveFactor.rgb;
+    }
+
+    // MRT output: linear HDR color + view-space normal (packed to [0,1]).
+    PSOut output;
+    output.color = float4(color, 1.0f);
+    float3 normalView = normalize(mul(float4(N, 0.0f), gView).xyz);
+    output.normalVS = float4(normalView * 0.5f + 0.5f, 1.0f);
+    return output;
 }

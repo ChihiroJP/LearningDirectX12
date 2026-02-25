@@ -36,9 +36,18 @@ public:
         return out;
     }
 
+    void AddScrollDelta(float delta) { m_scrollDelta += delta; }
+    float ConsumeScrollDelta()
+    {
+        float d = m_scrollDelta;
+        m_scrollDelta = 0.0f;
+        return d;
+    }
+
 private:
     bool m_keys[256] = {};
     int32_t m_mouseDx = 0;
     int32_t m_mouseDy = 0;
+    float m_scrollDelta = 0.0f;
 };
 

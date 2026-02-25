@@ -45,11 +45,6 @@ float2 DirToLatLongUV(float3 d)
     return float2(u, v);
 }
 
-float3 TonemapReinhard(float3 x)
-{
-    return x / (1.0 + x);
-}
-
 float4 PSMain(VSOut i) : SV_Target
 {
     // Reconstruct a world position on the far plane from screen uv.
@@ -64,10 +59,7 @@ float4 PSMain(VSOut i) : SV_Target
     float3 hdr = gEnvLatLong.SampleLevel(gSamp, envUV, 0).rgb;
     hdr *= gExposure;
 
-    float3 ldr = TonemapReinhard(hdr);
-    // Gamma encode for output to UNORM backbuffer.
-    ldr = pow(ldr, 1.0 / 2.2);
-
-    return float4(ldr, 1.0);
+    // Output linear HDR — tonemapping happens in post-process.
+    return float4(hdr, 1.0);
 }
 

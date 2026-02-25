@@ -1,0 +1,212 @@
+{
+  "cargoSpawn": [
+    0,
+    2
+  ],
+  "height": 8,
+  "name": "Untitled",
+  "playerSpawn": [
+    0,
+    1
+  ],
+  "tiles": [
+    {
+      "type": "Wall"
+    },
+    {
+      "type": "Wall"
+    },
+    {
+      "type": "Wall"
+    },
+    {
+      "type": "Wall"
+    },
+    {
+      "type": "Wall"
+    },
+    {
+      "type": "Wall"
+    },
+    {
+      "type": "Wall"
+    },
+    {
+      "type": "Wall"
+    },
+    {
+      "type": "Wall"
+    },
+    {
+      "type": "Wall"
+    },
+    null,
+    {
+      "type": "Fire"
+    },
+    {
+      "type": "Fire"
+    },
+    {
+      "type": "Fire"
+    },
+    {
+      "type": "Fire"
+    },
+    {
+      "type": "Fire"
+    },
+    {
+      "type": "Fire"
+    },
+    {
+      "type": "Wall"
+    },
+    {
+      "type": "Wall"
+    },
+    {
+      "type": "Wall"
+    },
+    null,
+    {
+      "type": "Fire"
+    },
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    {
+      "type": "Lightning"
+    },
+    {
+      "type": "Ice"
+    },
+    null,
+    {
+      "type": "Fire"
+    },
+    null,
+    {
+      "type": "Fire"
+    },
+    {
+      "type": "Fire"
+    },
+    {
+      "type": "Fire"
+    },
+    {
+      "type": "Ice"
+    },
+    null,
+    {
+      "type": "Ice"
+    },
+    {
+      "type": "Lightning"
+    },
+    null,
+    null,
+    null,
+    {
+      "type": "Fire"
+    },
+    {
+      "type": "Fire"
+    },
+    {
+      "type": "Ice"
+    },
+    {
+      "type": "Ice"
+    },
+    null,
+    {
+      "type": "Crumble"
+    },
+    {
+      "type": "Crumble"
+    },
+    {
+      "type": "Spike"
+    },
+    {
+      "type": "Crumble"
+    },
+    {
+      "type": "Spike"
+    },
+    null,
+    null,
+    null,
+    null,
+    null,
+    {
+      "type": "Crumble"
+    },
+    {
+      "type": "Crumble"
+    },
+    {
+      "type": "Spike"
+    },
+    {
+      "type": "Spike"
+    },
+    {
+      "type": "Spike"
+    },
+    null,
+    {
+      "type": "Fire"
+    },
+    {
+      "type": "Fire"
+    },
+    {
+      "type": "Fire"
+    },
+    {
+      "type": "Fire"
+    },
+    {
+      "type": "Fire"
+    },
+    {
+      "type": "Fire"
+    },
+    {
+      "type": "Spike"
+    },
+    {
+      "type": "Spike"
+    },
+    {
+      "type": "Spike"
+    },
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    {
+      "type": "Goal"
+    }
+  ],
+  "towers": [
+    {
+      "delay": 1.0,
+      "interval": 3.0,
+      "pattern": "Row",
+      "side": "Left",
+      "x": 0,
+      "y": 0
+    }
+  ],
+  "version": 1,
+  "width": 10
+}

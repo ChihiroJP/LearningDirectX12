@@ -1,16 +1,29 @@
 // ======================================
 // File: main.cpp
 // Purpose: Application entry point and main loop (window, input, camera,
-// rendering, ImGui)
+//          rendering, ImGui). Phase 8: uses render passes + FrameData.
 // ======================================
 
-#include "Camera.h" // Added: Camera class definition
+#include "Camera.h"
 #include "DxContext.h"
-#include "GltfLoader.h"
+#include "GridRenderer.h"
 #include "ImGuiLayer.h"
 #include "Input.h"
+#include "PostProcess.h"
+#include "RenderPass.h"
+#include "RenderPasses.h"
+#include "SSAORenderer.h"
+#include "IBLGenerator.h"
+#include "MeshRenderer.h"
+#include "SkyRenderer.h"
 #include "Win32Window.h"
+#include "particle_test.h"
+#include "gridgame/GridGame.h"
+#include "gridgame/StageData.h"
+#include "engine/Scene.h"
+#include "engine/SceneEditor.h"
 
+#include <array>
 #include <chrono>
 #include <cmath>
 #include <dbghelp.h>
@@ -34,13 +47,9 @@ static const char *StartupStageName(LONG s) {
   case 40:
     return "40: imgui.Initialize";
   case 50:
-    return "50: load cat glTF (begin)";
-  case 51:
-    return "51: catLoader.LoadModel";
-  case 52:
-    return "52: dx.CreateMeshResources(cat)";
+    return "50: GridGame::Init (begin)";
   case 60:
-    return "60: load terrain glTF + create plane mesh";
+    return "60: GridGame::Init (done)";
   case 70:
     return "70: main loop";
   default:
@@ -92,33 +101,6 @@ struct AppResizeContext {
   Camera *cam = nullptr;
 };
 
-static LoadedMesh MakeTiledPlaneXZ(float sizeX, float sizeZ, float uvRepeatX,
-                                  float uvRepeatZ) {
-  LoadedMesh m{};
-  m.vertices.resize(4);
-  // Wind triangles to match current mesh pipeline culling.
-  m.indices = {0, 2, 1, 0, 3, 2};
-
-  const float hx = sizeX * 0.5f;
-  const float hz = sizeZ * 0.5f;
-
-  // Plane on XZ at y=0, winding for LH coords.
-  // 0----1
-  // |  / |
-  // | /  |
-  // 3----2
-  MeshVertex v0{{-hx, 0.0f, -hz}, {0.0f, 1.0f, 0.0f}, {0.0f, 0.0f}};
-  MeshVertex v1{{+hx, 0.0f, -hz}, {0.0f, 1.0f, 0.0f}, {uvRepeatX, 0.0f}};
-  MeshVertex v2{{+hx, 0.0f, +hz}, {0.0f, 1.0f, 0.0f}, {uvRepeatX, uvRepeatZ}};
-  MeshVertex v3{{-hx, 0.0f, +hz}, {0.0f, 1.0f, 0.0f}, {0.0f, uvRepeatZ}};
-
-  m.vertices[0] = v0;
-  m.vertices[1] = v1;
-  m.vertices[2] = v2;
-  m.vertices[3] = v3;
-  return m;
-}
-
 static void OnResize(uint32_t w, uint32_t h, void *userData) {
   auto *ctx = reinterpret_cast<AppResizeContext *>(userData);
   if (ctx && ctx->dx)
@@ -134,7 +116,6 @@ static LONG WINAPI UnhandledExceptionHandler(_EXCEPTION_POINTERS *ep) {
   void *addr = ep && ep->ExceptionRecord ? ep->ExceptionRecord->ExceptionAddress
                                         : nullptr;
 
-  // Try to resolve which module the faulting address belongs to.
   char modPath[MAX_PATH] = {};
   HMODULE mod = nullptr;
   if (addr &&
@@ -145,11 +126,9 @@ static LONG WINAPI UnhandledExceptionHandler(_EXCEPTION_POINTERS *ep) {
     GetModuleFileNameA(mod, modPath, MAX_PATH);
   }
 
-  // Capture a small stack (addresses only) for quick diagnosis.
   void *frames[32] = {};
   USHORT frameCount = CaptureStackBackTrace(0, 32, frames, nullptr);
 
-  // Write a crash log next to the exe (working directory).
   {
     std::ofstream f("crash_log.txt", std::ios::out | std::ios::trunc);
     if (f) {
@@ -180,13 +159,111 @@ static LONG WINAPI UnhandledExceptionHandler(_EXCEPTION_POINTERS *ep) {
   return EXCEPTION_EXECUTE_HANDLER;
 }
 
+// Convert screen-space mouse position to a world-space point at a given depth
+// from the camera. Used to place the particle emitter in 3D space.
+static DirectX::XMVECTOR ScreenToWorld(int screenX, int screenY,
+                                       int screenW, int screenH,
+                                       const DirectX::XMMATRIX &view,
+                                       const DirectX::XMMATRIX &proj,
+                                       float depth) {
+  using namespace DirectX;
+  float ndcX = (2.0f * screenX / screenW - 1.0f);
+  float ndcY = -(2.0f * screenY / screenH - 1.0f); // flip Y
+
+  XMMATRIX invViewProj = XMMatrixInverse(nullptr, view * proj);
+  XMVECTOR nearPt = XMVector3TransformCoord(
+      XMVectorSet(ndcX, ndcY, 0.0f, 1.0f), invViewProj);
+  XMVECTOR farPt = XMVector3TransformCoord(
+      XMVectorSet(ndcX, ndcY, 1.0f, 1.0f), invViewProj);
+
+  XMVECTOR dir = XMVector3Normalize(XMVectorSubtract(farPt, nearPt));
+  return XMVectorAdd(nearPt, XMVectorScale(dir, depth));
+}
+
+// ---- CSM helpers (Phase 10.1) ----
+
+// Practical split scheme (GPU Gems 3, Nvidia).
+// lambda=0 is uniform, lambda=1 is logarithmic. Typical: 0.5.
+static void ComputeCascadeSplits(float nearZ, float farZ, uint32_t count,
+                                 float lambda, float outSplits[]) {
+  outSplits[0] = nearZ;
+  for (uint32_t i = 1; i <= count; ++i) {
+    const float p = static_cast<float>(i) / static_cast<float>(count);
+    const float logSplit = nearZ * std::pow(farZ / nearZ, p);
+    const float uniSplit = nearZ + (farZ - nearZ) * p;
+    outSplits[i] = lambda * logSplit + (1.0f - lambda) * uniSplit;
+  }
+}
+
+// Build a tight orthographic light-view-projection for a single cascade slice.
+static DirectX::XMMATRIX ComputeCascadeViewProj(
+    const DirectX::XMMATRIX &cameraView, float fovY, float aspect,
+    float splitNear, float splitFar,
+    const DirectX::XMVECTOR &lightDir) {
+  using namespace DirectX;
+
+  // 1) Build perspective projection for this split range.
+  const XMMATRIX sliceProj =
+      XMMatrixPerspectiveFovLH(fovY, aspect, splitNear, splitFar);
+  const XMMATRIX invVP = XMMatrixInverse(nullptr, cameraView * sliceProj);
+
+  // 2) Transform 8 NDC corners to world space.
+  static const XMFLOAT3 ndcCorners[8] = {
+      {-1, -1, 0}, {+1, -1, 0}, {-1, +1, 0}, {+1, +1, 0}, // near
+      {-1, -1, 1}, {+1, -1, 1}, {-1, +1, 1}, {+1, +1, 1}, // far
+  };
+  XMVECTOR corners[8];
+  for (int i = 0; i < 8; ++i)
+    corners[i] = XMVector3TransformCoord(XMLoadFloat3(&ndcCorners[i]), invVP);
+
+  // 3) Compute centroid of frustum slice.
+  XMVECTOR center = XMVectorZero();
+  for (int i = 0; i < 8; ++i)
+    center = XMVectorAdd(center, corners[i]);
+  center = XMVectorScale(center, 1.0f / 8.0f);
+
+  // 4) Build light view matrix looking along lightDir from centroid.
+  const XMVECTOR lightDirN = XMVector3Normalize(lightDir);
+  XMVECTOR up = XMVectorSet(0, 1, 0, 0);
+  if (std::fabs(XMVectorGetX(XMVector3Dot(up, lightDirN))) > 0.99f)
+    up = XMVectorSet(0, 0, 1, 0);
+
+  const XMVECTOR lightPos =
+      XMVectorSubtract(center, XMVectorScale(lightDirN, 200.0f));
+  const XMMATRIX lightView = XMMatrixLookAtLH(lightPos, center, up);
+
+  // 5) Transform corners to light space, find AABB.
+  float minX = FLT_MAX, maxX = -FLT_MAX;
+  float minY = FLT_MAX, maxY = -FLT_MAX;
+  float minZ = FLT_MAX, maxZ = -FLT_MAX;
+  for (int i = 0; i < 8; ++i) {
+    const XMVECTOR lc = XMVector3TransformCoord(corners[i], lightView);
+    const float x = XMVectorGetX(lc);
+    const float y = XMVectorGetY(lc);
+    const float z = XMVectorGetZ(lc);
+    if (x < minX) minX = x; if (x > maxX) maxX = x;
+    if (y < minY) minY = y; if (y > maxY) maxY = y;
+    if (z < minZ) minZ = z; if (z > maxZ) maxZ = z;
+  }
+
+  // 6) Extend minZ backward to catch shadow casters behind the frustum.
+  const float zRange = maxZ - minZ;
+  minZ -= zRange * 2.0f;
+
+  // 7) Build tight orthographic projection.
+  const XMMATRIX lightProj =
+      XMMatrixOrthographicOffCenterLH(minX, maxX, minY, maxY, minZ, maxZ);
+
+  return lightView * lightProj;
+}
+
 int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int nCmdShow) {
   try {
     SetUnhandledExceptionFilter(UnhandledExceptionHandler);
 
     Win32Window window;
     SetStartupStage(10);
-    window.Create(L"DX12 Tutorial 12", 1280, 720);
+    window.Create(L"DX12 Tutorial 12", 1920, 1080);
 
     DxContext dx;
     SetStartupStage(20);
@@ -209,30 +286,67 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int nCmdShow) {
     SetStartupStage(40);
     imgui.Initialize(window, dx);
 
-    // Load both cat + terrain (terrain should NOT delete the cat).
-    uint32_t catMeshId = UINT32_MAX;
-    uint32_t terrainMeshId = UINT32_MAX;
+    // ---- Initialize renderer modules (Phase 8) ----
+    SkyRenderer skyRenderer;
+    skyRenderer.Initialize(dx);
 
-    GltfLoader catLoader;
+    IBLGenerator iblGenerator;
+    iblGenerator.Initialize(dx, skyRenderer.HdriTexture(), skyRenderer.HdriSrvGpu());
+
+    GridRenderer gridRenderer;
+    gridRenderer.Initialize(dx);
+
+    // ---- Initialize Grid Gauntlet ----
+    GridGame gridGame;
     SetStartupStage(50);
-    SetStartupStage(51);
-    if (catLoader.LoadModel("Assets/GlTF/concrete_cat_statue_2k.gltf/"
-                            "concrete_cat_statue_2k.gltf")) {
-      SetStartupStage(52);
-      catMeshId =
-          dx.CreateMeshResources(catLoader.GetMesh(), &catLoader.GetBaseColorImage());
-    }
-
-    GltfLoader terrainLoader;
+    gridGame.Init(cam, dx);
     SetStartupStage(60);
-    if (terrainLoader.LoadModel("Assets/GlTF/rock_terrain_2k.gltf/"
-                                "rock_boulder_cracked_2k.gltf")) {
-      // Instead of scaling the boulder mesh to 500x500 (which causes ugly
-      // stretching), build a simple 500x500 plane and tile the texture.
-      LoadedMesh plane = MakeTiledPlaneXZ(500.0f, 500.0f, 50.0f, 50.0f);
-      terrainMeshId =
-          dx.CreateMeshResources(plane, &terrainLoader.GetBaseColorImage());
-    }
+
+    // Wire IBL descriptors to the mesh renderer + DxContext (for deferred lighting).
+    dx.GetMeshRenderer().SetIBLDescriptors(iblGenerator.IBLTableGpuBase());
+    dx.SetIblTableGpu(iblGenerator.IBLTableGpuBase());
+
+    // Initialize particle system.
+    dx.InitParticleRenderer();
+    DirectX::XMVECTOR firePos = DirectX::XMVectorSet(0.0f, 1.0f, 0.0f, 0.0f);
+    NormalEmitter fireEmitter(512, firePos, 120.0, true);
+    float particleDepth = 8.0f;
+    bool particlesEnabled = true;
+    bool fireEnabled = true;
+
+    DirectX::XMVECTOR smokePos = DirectX::XMVectorSet(-3.0f, 0.0f, 3.0f, 0.0f);
+    SmokeEmitter smokeEmitter(256, smokePos, 30.0, true);
+    bool smokeEnabled = true;
+
+    DirectX::XMVECTOR sparkPos = DirectX::XMVectorSet(3.0f, 0.0f, 3.0f, 0.0f);
+    SparkEmitter sparkEmitter(256, sparkPos, 80.0, true);
+    bool sparkEnabled = true;
+
+    // ---- Initialize post-processing (Phase 9) ----
+    PostProcessRenderer postProcess;
+    postProcess.Initialize(dx);
+
+    // ---- Initialize SSAO (Phase 10.3) ----
+    SSAORenderer ssaoRenderer;
+    ssaoRenderer.Initialize(dx);
+
+    // ---- Create render passes (Phase 8 + Phase 9 + Phase 12.1) ----
+    ShadowPass shadowPass(dx.GetShadowMap(), dx.GetMeshRenderer());
+    SkyPass skyPass(skyRenderer);
+    GBufferPass gbufferPass(dx.GetMeshRenderer());
+    DeferredLightingPass deferredLightingPass(dx.GetShadowMap(), dx.GetMeshRenderer());
+    GridPass gridPass(gridRenderer);
+    TransparentPass transparentPass(dx.GetParticleRenderer());
+    SSAOPass ssaoPass(ssaoRenderer);
+    BloomPass bloomPass(postProcess);
+    TonemapPass tonemapPass(postProcess);
+    DOFPass dofPass(postProcess);
+    VelocityGenPass velocityGenPass(postProcess);
+    TAAPass taaPass(postProcess);
+    MotionBlurPass motionBlurPass(postProcess);
+    FXAAPass fxaaPass(postProcess);
+    HighlightPass highlightPass(dx.GetMeshRenderer());
+    UIPass uiPass(imgui);
 
     using clock = std::chrono::steady_clock;
     auto start = clock::now();
@@ -241,18 +355,28 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int nCmdShow) {
     float fpsTimer = 0.0f;
     uint32_t fpsFrames = 0;
     float fpsValue = 0.0f;
-    float skyExposure = 1.0f;
-    MeshLightingParams meshLight{};
-    bool shadowsEnabled = true;
-    float shadowStrength = 1.0f;
-    float shadowBias = 0.0015f;
-    float shadowOrthoRadius = 150.0f;
-    float shadowDistance = 200.0f;
-    float shadowNearZ = 1.0f;
-    float shadowFarZ = 500.0f;
+    float skyExposure = 0.3f;
+
+    // IBL (Phase 10.2)
+    bool iblEnabled = true;
+
+    // Settings UI (Phase 12.6)
+    bool showSettings = false;
+    bool prevEsc = false;
+
+    // ---- Editor/Game mode toggle (Milestone 4 Phase 0) ----
+    enum class AppMode { Editor, Game };
+    AppMode appMode = AppMode::Editor;
+    Scene editorScene;
+    SceneEditor sceneEditor;
+    StageData editStage; // Grid editor stage data (Phase 5).
+    editStage.Clear();   // Initialize with default grid.
+    sceneEditor.InitEditorMeshes(dx); // Phase 5B: create viewport tile meshes.
+    bool prevF5 = false;
+    bool prevLButton = false; // for edge-detection of left-click (mouse pick)
 
     SetStartupStage(70);
-    while (window.PumpMessages()) {
+    while (window.PumpMessages() && !(appMode == AppMode::Game && gridGame.WantsQuit())) {
       auto now = clock::now();
       float dt = std::chrono::duration<float>(now - prev).count();
       prev = now;
@@ -264,30 +388,128 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int nCmdShow) {
 
       auto &input = window.GetInput();
 
-      imgui.BeginFrame(dt);
-
-      // If ImGui is using input, don't let it move the camera.
-      const bool uiWantsMouse = imgui.WantCaptureMouse();
-      const bool uiWantsKeyboard = imgui.WantCaptureKeyboard();
-
-      // Hold RMB to enable mouse-look.
-      const bool wantMouseLook = (!uiWantsMouse) && input.IsKeyDown(VK_RBUTTON);
-      window.SetMouseCaptured(wantMouseLook);
-
-      // Apply raw mouse delta to yaw/pitch while mouse-look is active.
-      auto md = input.ConsumeMouseDelta();
-      if (wantMouseLook) {
-        // Yaw: +dx, Pitch: -dy (mouse up looks up).
-        cam.AddYawPitch(md.dx * 0.0025f, -md.dy * 0.0025f);
+      // ---- F5: toggle Editor / Game mode (Milestone 4) ----
+      {
+        const bool f5Now = input.IsKeyDown(VK_F5);
+        if (f5Now && !prevF5)
+          appMode = (appMode == AppMode::Editor) ? AppMode::Game : AppMode::Editor;
+        prevF5 = f5Now;
       }
 
-      // Let keyboard movement work even with ImGui windows open, but still
-      // respect UI capture. RMB mouse-look is an explicit "game control" mode,
-      // so allow movement then as well.
-      if (!uiWantsKeyboard || wantMouseLook)
+      // ---- F6: toggle Grid Editor panel (Phase 5) ----
+      {
+        static bool prevF6 = false;
+        const bool f6Now = input.IsKeyDown(VK_F6);
+        if (f6Now && !prevF6 && appMode == AppMode::Editor)
+          sceneEditor.ToggleGridEditor();
+        prevF6 = f6Now;
+      }
+
+      // ---- Settings toggle — only when in game mode on main menu (Phase 12.6) ----
+      if (appMode == AppMode::Game && gridGame.GetState() == GridGameState::MainMenu) {
+        const bool escNow = input.IsKeyDown(VK_ESCAPE);
+        if (escNow && !prevEsc)
+          showSettings = !showSettings;
+        prevEsc = escNow;
+      }
+
+      imgui.BeginFrame(dt);
+
+      const bool uiWantsMouse = imgui.WantCaptureMouse();
+
+      // Editor-style camera: RMB+WASD to fly, scroll to zoom (like Unity/UE5).
+      const bool isPlaying = (appMode == AppMode::Game && gridGame.GetState() == GridGameState::Playing);
+      const bool wantMouseLook = !isPlaying && (!uiWantsMouse) && input.IsKeyDown(VK_RBUTTON);
+
+      // Always consume scroll to prevent accumulation.
+      float scroll = input.ConsumeScrollDelta();
+
+      if (!isPlaying) {
+        auto md = input.ConsumeMouseDelta();
+        if (wantMouseLook) {
+          cam.AddYawPitch(md.dx * 0.0025f, -md.dy * 0.0025f);
+        }
         cam.Update(dt, input, wantMouseLook);
 
-      // FPS + debug title update (once per ~1s).
+        // Scroll wheel zoom (when UI doesn't want mouse).
+        if (!uiWantsMouse)
+          cam.ApplyScrollZoom(scroll);
+      }
+
+      // ---- Mouse picking (editor, left-click) ----
+      if (appMode == AppMode::Editor && !uiWantsMouse &&
+          !sceneEditor.GetGizmo().IsActive()) {
+        bool lbNow = input.IsKeyDown(VK_LBUTTON);
+
+        if (sceneEditor.IsGridEditorOpen()) {
+          // Phase 5B: viewport tile picking + painting.
+          POINT cursorPos;
+          GetCursorPos(&cursorPos);
+          ScreenToClient(window.Handle(), &cursorPos);
+          if (cursorPos.x >= 0 &&
+              cursorPos.x < static_cast<LONG>(window.Width()) &&
+              cursorPos.y >= 0 &&
+              cursorPos.y < static_cast<LONG>(window.Height())) {
+            if (lbNow) {
+              sceneEditor.HandleViewportTilePaint(
+                  editStage, cursorPos.x, cursorPos.y,
+                  static_cast<int>(window.Width()),
+                  static_cast<int>(window.Height()), cam.View(), cam.Proj());
+            }
+          }
+          if (!lbNow && prevLButton) {
+            sceneEditor.FinalizeViewportPaintStroke(editStage);
+          }
+        } else {
+          // Normal entity picking (edge-detect only).
+          if (lbNow && !prevLButton) {
+            POINT cursorPos;
+            GetCursorPos(&cursorPos);
+            ScreenToClient(window.Handle(), &cursorPos);
+            if (cursorPos.x >= 0 &&
+                cursorPos.x < static_cast<LONG>(window.Width()) &&
+                cursorPos.y >= 0 &&
+                cursorPos.y < static_cast<LONG>(window.Height())) {
+              sceneEditor.HandleMousePick(
+                  editorScene, cursorPos.x, cursorPos.y,
+                  static_cast<int>(window.Width()),
+                  static_cast<int>(window.Height()), cam.View(), cam.Proj());
+            }
+          }
+        }
+        prevLButton = lbNow;
+      } else {
+        prevLButton = input.IsKeyDown(VK_LBUTTON);
+      }
+
+      // Update particle emitters (demo only — not during gameplay).
+      if (particlesEnabled && !isPlaying &&
+          (appMode == AppMode::Editor || (gridGame.GetState() != GridGameState::Paused))) {
+        // Fire emitter follows cursor in world space.
+        if (fireEnabled) {
+          POINT cursorPos;
+          GetCursorPos(&cursorPos);
+          ScreenToClient(window.Handle(), &cursorPos);
+
+          if (cursorPos.x >= 0 &&
+              cursorPos.x < static_cast<LONG>(window.Width()) &&
+              cursorPos.y >= 0 &&
+              cursorPos.y < static_cast<LONG>(window.Height())) {
+            DirectX::XMVECTOR worldPos = ScreenToWorld(
+                cursorPos.x, cursorPos.y, window.Width(), window.Height(),
+                cam.View(), cam.Proj(), particleDepth);
+            fireEmitter.SetPosition(worldPos);
+          }
+          fireEmitter.Update(static_cast<double>(dt));
+        }
+
+        if (smokeEnabled)
+          smokeEmitter.Update(static_cast<double>(dt));
+        if (sparkEnabled)
+          sparkEmitter.Update(static_cast<double>(dt));
+      }
+
+      // FPS + debug title update.
       fpsTimer += dt;
       fpsFrames += 1;
       if (fpsTimer >= 1.0f) {
@@ -304,115 +526,235 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int nCmdShow) {
         window.SetTitle(ss.str());
       }
 
+      // ---- Settings window (Phase 12.6) ----
+      if (showSettings) {
+        ImGui::SetNextWindowSize(ImVec2(300, 0), ImGuiCond_Once);
+        ImGui::Begin("Settings", &showSettings);
+
+        ImGui::Text("Display Mode");
+        ImGui::Separator();
+
+        const bool isFS = window.IsFullscreen();
+        const uint32_t curW = window.Width();
+        const uint32_t curH = window.Height();
+
+        if (ImGui::RadioButton("Fullscreen", isFS)) {
+          if (!isFS) window.SetFullscreen(true);
+        }
+        if (ImGui::RadioButton("1080p (Windowed)", !isFS && curW == 1920 && curH == 1080)) {
+          window.SetWindowedResolution(1920, 1080);
+        }
+        if (ImGui::RadioButton("720p (Windowed)", !isFS && curW == 1280 && curH == 720)) {
+          window.SetWindowedResolution(1280, 720);
+        }
+
+        ImGui::End();
+      }
+
+      // ---- ImGui debug windows ----
       imgui.DrawDebugWindow(cam, fpsValue, dt);
+      ImGui::SetNextWindowCollapsed(true, ImGuiCond_FirstUseEver);
       ImGui::Begin("Sky");
       ImGui::SliderFloat("Exposure", &skyExposure, 0.01f, 8.0f, "%.2f",
                          ImGuiSliderFlags_Logarithmic);
       ImGui::End();
 
-      ImGui::Begin("Lighting");
-      ImGui::Text("Directional (sun) light");
-      ImGui::SliderFloat3("Sun rays dir", &meshLight.lightDir.x, -1.0f, 1.0f);
-      ImGui::SliderFloat("Intensity", &meshLight.lightIntensity, 0.0f, 20.0f,
-                         "%.2f", ImGuiSliderFlags_Logarithmic);
-      ImGui::ColorEdit3("Color", &meshLight.lightColor.x);
-      ImGui::SliderFloat("Roughness", &meshLight.roughness, 0.02f, 1.0f, "%.2f");
-      ImGui::SliderFloat("Metallic", &meshLight.metallic, 0.0f, 1.0f, "%.2f");
+      ImGui::SetNextWindowCollapsed(true, ImGuiCond_FirstUseEver);
+      ImGui::Begin("Particles");
+      ImGui::Checkbox("Enable All", &particlesEnabled);
+      ImGui::Separator();
+
+      if (ImGui::CollapsingHeader("Fire (cursor)", ImGuiTreeNodeFlags_DefaultOpen)) {
+        ImGui::Checkbox("Fire Enable", &fireEnabled);
+        ImGui::SliderFloat("Cursor depth", &particleDepth, 1.0f, 30.0f, "%.1f");
+        ImGui::Text("Alive: %zu", fireEmitter.GetCount());
+        if (ImGui::Button(fireEmitter.isEmmit() ? "Stop Fire" : "Start Fire")) {
+          fireEmitter.Emmit(!fireEmitter.isEmmit());
+        }
+      }
+
+      if (ImGui::CollapsingHeader("Smoke", ImGuiTreeNodeFlags_DefaultOpen)) {
+        ImGui::Checkbox("Smoke Enable", &smokeEnabled);
+        ImGui::Text("Alive: %zu", smokeEmitter.GetCount());
+        if (ImGui::Button(smokeEmitter.isEmmit() ? "Stop Smoke" : "Start Smoke")) {
+          smokeEmitter.Emmit(!smokeEmitter.isEmmit());
+        }
+        static float smokeX = -3.0f, smokeY = 0.0f, smokeZ = 3.0f;
+        bool smokePosDirty = false;
+        smokePosDirty |= ImGui::SliderFloat("Smoke X", &smokeX, -20.0f, 20.0f, "%.1f");
+        smokePosDirty |= ImGui::SliderFloat("Smoke Y", &smokeY, -5.0f, 20.0f, "%.1f");
+        smokePosDirty |= ImGui::SliderFloat("Smoke Z", &smokeZ, -20.0f, 20.0f, "%.1f");
+        if (smokePosDirty)
+          smokeEmitter.SetPosition(DirectX::XMVectorSet(smokeX, smokeY, smokeZ, 0.0f));
+      }
+
+      if (ImGui::CollapsingHeader("Sparks", ImGuiTreeNodeFlags_DefaultOpen)) {
+        ImGui::Checkbox("Spark Enable", &sparkEnabled);
+        ImGui::Text("Alive: %zu", sparkEmitter.GetCount());
+        if (ImGui::Button(sparkEmitter.isEmmit() ? "Stop Sparks" : "Start Sparks")) {
+          sparkEmitter.Emmit(!sparkEmitter.isEmmit());
+        }
+        static float sparkX = 3.0f, sparkY = 0.0f, sparkZ = 3.0f;
+        bool sparkPosDirty = false;
+        sparkPosDirty |= ImGui::SliderFloat("Spark X", &sparkX, -20.0f, 20.0f, "%.1f");
+        sparkPosDirty |= ImGui::SliderFloat("Spark Y", &sparkY, -5.0f, 20.0f, "%.1f");
+        sparkPosDirty |= ImGui::SliderFloat("Spark Z", &sparkZ, -20.0f, 20.0f, "%.1f");
+        if (sparkPosDirty)
+          sparkEmitter.SetPosition(DirectX::XMVectorSet(sparkX, sparkY, sparkZ, 0.0f));
+      }
+
       ImGui::End();
 
-      ImGui::Begin("Shadows v1");
-      ImGui::Checkbox("Enable", &shadowsEnabled);
-      ImGui::SliderFloat("Strength", &shadowStrength, 0.0f, 1.0f, "%.2f");
-      ImGui::SliderFloat("Bias", &shadowBias, 0.0000f, 0.01f, "%.5f",
-                         ImGuiSliderFlags_Logarithmic);
-      ImGui::SliderFloat("Ortho radius", &shadowOrthoRadius, 20.0f, 400.0f,
-                         "%.1f");
-      ImGui::SliderFloat("Light distance", &shadowDistance, 20.0f, 600.0f,
-                         "%.1f");
-      ImGui::SliderFloat("NearZ", &shadowNearZ, 0.1f, 50.0f, "%.2f",
-                         ImGuiSliderFlags_Logarithmic);
-      ImGui::SliderFloat("FarZ", &shadowFarZ, 50.0f, 2000.0f, "%.1f",
-                         ImGuiSliderFlags_Logarithmic);
-      ImGui::Text("Shadow map size: %u", dx.ShadowMapSize());
-      ImGui::End();
+      // SSAO, Post Processing, and Cascaded Shadows panels moved to SceneEditor (Phase 4).
 
-      // Compute light view-projection for shadow map (directional light).
+      // ---- Compute CSM cascade splits + per-cascade light VP ----
       using namespace DirectX;
+      const auto &shadowCfg = editorScene.ShadowSettings();
       const XMVECTOR raysDir =
-          XMVector3Normalize(XMLoadFloat3(&meshLight.lightDir));
+          XMVector3Normalize(XMLoadFloat3(&editorScene.LightSettings().lightDir));
       const XMFLOAT3 camPosF = cam.GetPosition();
-      const XMVECTOR focus = XMLoadFloat3(&camPosF);
-      const XMVECTOR lightPos = focus - raysDir * shadowDistance;
 
-      XMVECTOR up = XMVectorSet(0, 1, 0, 0);
-      const float upDot =
-          fabsf(XMVectorGetX(XMVector3Dot(up, raysDir)));
-      if (upDot > 0.99f)
-        up = XMVectorSet(0, 0, 1, 0);
+      const uint32_t cascadeCount = dx.GetShadowMap().CascadeCount();
+      float splits[kMaxCascades + 1];
+      ComputeCascadeSplits(cam.NearZ(), shadowCfg.csmMaxDistance, cascadeCount,
+                           shadowCfg.csmLambda, splits);
 
-      const XMMATRIX lightView = XMMatrixLookAtLH(lightPos, focus, up);
-      const XMMATRIX lightProj = XMMatrixOrthographicOffCenterLH(
-          -shadowOrthoRadius, shadowOrthoRadius, -shadowOrthoRadius,
-          shadowOrthoRadius, shadowNearZ, shadowFarZ);
-      const XMMATRIX lightViewProj = lightView * lightProj;
+      std::array<XMMATRIX, kMaxCascades> cascadeVP = {};
+      std::array<float, kMaxCascades> cascadeSplitDists = {};
+      for (uint32_t c = 0; c < cascadeCount; ++c) {
+        cascadeSplitDists[c] = splits[c + 1];
+        cascadeVP[c] = ComputeCascadeViewProj(cam.View(), cam.FovY(),
+                                              cam.Aspect(), splits[c],
+                                              splits[c + 1], raysDir);
+      }
 
+      // ---- TAA jitter (Phase 10.4) ----
+      cam.EnableJitter(editorScene.PostProcessSettings().taaEnabled);
+      cam.AdvanceJitter(dx.Width(), dx.Height());
+
+      // ---- Build FrameData (Phase 8) ----
+      // Shadow, SSAO, and post-process fields are set by Scene::BuildFrameData().
+      FrameData frame{};
+      frame.view = cam.View();
+      frame.proj = cam.Proj(); // includes jitter when TAA is enabled
+      frame.cameraPos = camPosF;
+      frame.cascadeCount = cascadeCount;
+      frame.cascadeLightViewProj = cascadeVP;
+      frame.cascadeSplitDistances = cascadeSplitDists;
+      frame.skyExposure = skyExposure;
+      frame.clearColor[0] = r;
+      frame.clearColor[1] = g;
+      frame.clearColor[2] = b;
+      frame.clearColor[3] = 1.0f;
+      frame.particlesEnabled = true;
+      // Demo emitters only outside gameplay
+      if (appMode == AppMode::Editor || (gridGame.GetState() != GridGameState::Playing &&
+          gridGame.GetState() != GridGameState::Paused)) {
+        if (particlesEnabled && fireEnabled)
+          frame.emitters.push_back(&fireEmitter);
+        if (particlesEnabled && smokeEnabled)
+          frame.emitters.push_back(&smokeEmitter);
+        if (particlesEnabled && sparkEnabled)
+          frame.emitters.push_back(&sparkEmitter);
+      }
+
+      // Motion blur view-projection matrices (camera-dependent).
+      {
+        XMMATRIX vp = frame.view * frame.proj;
+        frame.invViewProj = XMMatrixInverse(nullptr, vp);
+        frame.prevViewProj = cam.PrevViewProj();
+        frame.hasPrevViewProj = cam.HasPrevViewProj();
+      }
+
+      // TAA view-projection matrices (camera-dependent).
+      {
+        XMMATRIX vpUnjittered = frame.view * cam.ProjUnjittered();
+        frame.invViewProjUnjittered = XMMatrixInverse(nullptr, vpUnjittered);
+        frame.prevViewProjUnjittered = cam.PrevViewProjUnjittered();
+      }
+
+      // ---- Game / Editor layer update (Milestone 4) ----
+      if (appMode == AppMode::Game) {
+        gridGame.Update(dt, input, window, frame);
+      } else {
+        sceneEditor.DrawUI(editorScene, dx, cam.View(), cam.Proj(), &iblEnabled,
+                           &editStage);
+        editorScene.BuildFrameData(frame);
+        sceneEditor.BuildHighlightItems(editorScene, frame);
+
+        // Phase 5B: inject 3D grid tiles into FrameData when grid editor is open.
+        if (sceneEditor.IsGridEditorOpen()) {
+          sceneEditor.BuildStageViewportItems(editStage, frame);
+        }
+      }
+
+      // Mode indicator overlay.
+      {
+        ImGui::SetNextWindowPos(ImVec2(10, static_cast<float>(window.Height()) - 30.0f));
+        ImGui::Begin("##ModeIndicator", nullptr,
+            ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize |
+            ImGuiWindowFlags_NoMove | ImGuiWindowFlags_AlwaysAutoResize |
+            ImGuiWindowFlags_NoBackground);
+        if (appMode == AppMode::Editor && sceneEditor.IsGridEditorOpen()) {
+          ImGui::TextColored(ImVec4(0.2f,0.8f,1,1), "[EDITOR] F5=Game  F6=Grid Editor (ON)");
+        } else {
+          ImGui::TextColored(
+              appMode == AppMode::Editor ? ImVec4(0,1,0.5f,1) : ImVec4(1,0.5f,0,1),
+              appMode == AppMode::Editor ? "[EDITOR] F5=Game  F6=Grid Editor" : "[GAME] F5=Editor");
+        }
+        ImGui::End();
+      }
+
+      // Toggle IBL descriptors on/off (mesh renderer + deferred lighting).
+      if (iblEnabled) {
+        dx.GetMeshRenderer().SetIBLDescriptors(iblGenerator.IBLTableGpuBase());
+        dx.SetIblTableGpu(iblGenerator.IBLTableGpuBase());
+      } else {
+        dx.GetMeshRenderer().SetIBLDescriptors({});
+        dx.SetIblTableGpu({});
+      }
+      // IBL intensity: gate by iblEnabled toggle, otherwise use scene value.
+      if (!iblEnabled)
+        frame.lighting.iblIntensity = 0.0f;
+      frame.lighting.cascadeDebug = shadowCfg.csmDebugCascades ? 1.0f : 0.0f;
+
+      // ---- Execute render passes (Phase 8 + Phase 9 + Phase 12.1) ----
       dx.BeginFrame();
-
-      // Shadow pass (depth-only) before main pass.
-      if (shadowsEnabled) {
-        dx.BeginShadowPass();
-        if (terrainMeshId != UINT32_MAX) {
-          dx.DrawMeshShadow(terrainMeshId,
-                            XMMatrixTranslation(0.0f, 0.0f, 0.0f),
-                            lightViewProj);
-        }
-        if (catMeshId != UINT32_MAX) {
-          dx.DrawMeshShadow(catMeshId,
-                            XMMatrixScaling(10.0f, 10.0f, 10.0f) *
-                                XMMatrixTranslation(0.0f, 0.0f, 0.0f),
-                            lightViewProj);
-        }
-        dx.EndShadowPass();
-      }
-
-      dx.Clear(r, g, b, 1.0f);
-      dx.ClearDepth(1.0f);
-      dx.DrawSky(cam.View(), cam.Proj(), skyExposure);
-      dx.DrawGridAxes(cam.View(), cam.Proj());
-
-      MeshShadowParams shadowParams{};
-      if (shadowsEnabled) {
-        shadowParams.lightViewProj = lightViewProj;
-      }
-
-      // Fill shadow params (SRV + texel size) from DxContext.
-      if (shadowsEnabled && dx.ShadowMapSize() > 0) {
-        const float inv = 1.0f / static_cast<float>(dx.ShadowMapSize());
-        shadowParams.texelSize = {inv, inv};
-        shadowParams.bias = shadowBias;
-        shadowParams.strength = shadowStrength;
-        shadowParams.shadowSrvGpu = dx.ShadowSrvGpu();
-      }
-
-      // Draw Terrain floor (target scale ~500x500 on XZ).
-      if (terrainMeshId != UINT32_MAX) {
-        dx.DrawMesh(terrainMeshId,
-                    DirectX::XMMatrixTranslation(0.0f, 0.0f, 0.0f),
-                    cam.View(), cam.Proj(), meshLight, shadowParams);
-      }
-
-      // Draw Cat (keep it!).
-      if (catMeshId != UINT32_MAX) {
-        dx.DrawMesh(catMeshId,
-                    DirectX::XMMatrixScaling(10.0f, 10.0f, 10.0f) *
-                        DirectX::XMMatrixTranslation(0.0f, 0.0f, 0.0f),
-                    cam.View(), cam.Proj(), meshLight, shadowParams);
-      }
-
-      imgui.Render(dx);
+      shadowPass.Execute(dx, frame);
+      skyPass.Execute(dx, frame);
+      gbufferPass.Execute(dx, frame);
+      deferredLightingPass.Execute(dx, frame);
+      gridPass.Execute(dx, frame);
+      transparentPass.Execute(dx, frame);
+      highlightPass.Execute(dx, frame);
+      ssaoPass.Execute(dx, frame);
+      velocityGenPass.Execute(dx, frame);  // moved before TAA (Phase 10.4)
+      taaPass.Execute(dx, frame);          // TAA resolve (Phase 10.4)
+      bloomPass.Execute(dx, frame);
+      tonemapPass.Execute(dx, frame);
+      dofPass.Execute(dx, frame);
+      motionBlurPass.Execute(dx, frame);
+      fxaaPass.Execute(dx, frame);
+      uiPass.Execute(dx, frame);
       dx.EndFrame();
+
+      // Swap TAA ping-pong so next frame reads our output as history.
+      if (editorScene.PostProcessSettings().taaEnabled) {
+        dx.SwapTaaBuffers();
+      }
+
+      // Store current VP as "previous" for next frame's motion blur.
+      cam.UpdatePrevViewProj();
     }
 
+    // ---- Shutdown (reverse init order) ----
+    dx.WaitForGpu(); // Flush GPU before releasing any resources
+    gridGame.Shutdown();
+    ssaoRenderer.Reset();
+    postProcess.Reset();
+    iblGenerator.Reset();
+    skyRenderer.Reset();
+    gridRenderer.Reset();
     imgui.Shutdown(window);
     dx.Shutdown();
   } catch (const std::exception &e) {
