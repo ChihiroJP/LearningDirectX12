@@ -8,6 +8,7 @@
 #include "MeshRenderer.h"
 #include "DxContext.h"
 #include "DxUtil.h"
+#include "ShaderCompiler.h"
 
 #include <cstring>
 #include <d3dcompiler.h>
@@ -59,6 +60,195 @@ void MeshRenderer::Reset() {
   m_defaultMetalRough.upload.Reset();
   m_defaultMidGray.tex.Reset();
   m_defaultMidGray.upload.Reset();
+}
+
+std::string MeshRenderer::ReloadShaders(DxContext &dx) {
+  std::string errors;
+
+  // ---- Forward pass (mesh.hlsl) ----
+  {
+    auto vs = CompileShaderSafe(L"shaders/mesh.hlsl", "VSMain", "vs_5_1");
+    auto ps = CompileShaderSafe(L"shaders/mesh.hlsl", "PSMain", "ps_5_1");
+    if (vs.success && ps.success) {
+      D3D12_INPUT_ELEMENT_DESC inputElems[] = {
+          {"POSITION", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 0, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0},
+          {"NORMAL", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 12, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0},
+          {"TEXCOORD", 0, DXGI_FORMAT_R32G32_FLOAT, 0, 24, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0},
+          {"TANGENT", 0, DXGI_FORMAT_R32G32B32A32_FLOAT, 0, 32, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0},
+      };
+      D3D12_GRAPHICS_PIPELINE_STATE_DESC pso{};
+      pso.pRootSignature = m_rootSig.Get();
+      pso.VS = {vs.bytecode->GetBufferPointer(), vs.bytecode->GetBufferSize()};
+      pso.PS = {ps.bytecode->GetBufferPointer(), ps.bytecode->GetBufferSize()};
+      D3D12_BLEND_DESC blend{};
+      blend.RenderTarget[0].BlendEnable = FALSE;
+      blend.RenderTarget[0].RenderTargetWriteMask = D3D12_COLOR_WRITE_ENABLE_ALL;
+      blend.RenderTarget[1].BlendEnable = FALSE;
+      blend.RenderTarget[1].RenderTargetWriteMask = D3D12_COLOR_WRITE_ENABLE_ALL;
+      pso.BlendState = blend;
+      pso.SampleMask = UINT_MAX;
+      D3D12_RASTERIZER_DESC rast{};
+      rast.FillMode = D3D12_FILL_MODE_SOLID;
+      rast.CullMode = D3D12_CULL_MODE_BACK;
+      rast.DepthClipEnable = TRUE;
+      pso.RasterizerState = rast;
+      D3D12_DEPTH_STENCIL_DESC ds{};
+      ds.DepthEnable = TRUE;
+      ds.DepthWriteMask = D3D12_DEPTH_WRITE_MASK_ALL;
+      ds.DepthFunc = D3D12_COMPARISON_FUNC_LESS;
+      pso.DepthStencilState = ds;
+      pso.DSVFormat = dx.m_depthFormat;
+      pso.InputLayout = {inputElems, _countof(inputElems)};
+      pso.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE;
+      pso.NumRenderTargets = 2;
+      pso.RTVFormats[0] = dx.m_hdrFormat;
+      pso.RTVFormats[1] = DXGI_FORMAT_R16G16B16A16_FLOAT;
+      pso.SampleDesc.Count = 1;
+      ComPtr<ID3D12PipelineState> newPso;
+      if (SUCCEEDED(dx.m_device->CreateGraphicsPipelineState(&pso, IID_PPV_ARGS(&newPso))))
+        m_pso = newPso;
+    } else {
+      if (!vs.success) errors += "[mesh.hlsl VS] " + vs.errorMessage + "\n";
+      if (!ps.success) errors += "[mesh.hlsl PS] " + ps.errorMessage + "\n";
+    }
+  }
+
+  // ---- G-buffer pass (gbuffer.hlsl) ----
+  {
+    auto vs = CompileShaderSafe(L"shaders/gbuffer.hlsl", "VSMain", "vs_5_1");
+    auto ps = CompileShaderSafe(L"shaders/gbuffer.hlsl", "PSMain", "ps_5_1");
+    if (vs.success && ps.success) {
+      D3D12_INPUT_ELEMENT_DESC inputElems[] = {
+          {"POSITION", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 0, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0},
+          {"NORMAL", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 12, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0},
+          {"TEXCOORD", 0, DXGI_FORMAT_R32G32_FLOAT, 0, 24, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0},
+          {"TANGENT", 0, DXGI_FORMAT_R32G32B32A32_FLOAT, 0, 32, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0},
+      };
+      D3D12_GRAPHICS_PIPELINE_STATE_DESC pso{};
+      pso.pRootSignature = m_gbufferRootSig.Get();
+      pso.VS = {vs.bytecode->GetBufferPointer(), vs.bytecode->GetBufferSize()};
+      pso.PS = {ps.bytecode->GetBufferPointer(), ps.bytecode->GetBufferSize()};
+      D3D12_BLEND_DESC blend{};
+      for (int i = 0; i < 4; ++i) {
+        blend.RenderTarget[i].BlendEnable = FALSE;
+        blend.RenderTarget[i].RenderTargetWriteMask = D3D12_COLOR_WRITE_ENABLE_ALL;
+      }
+      pso.BlendState = blend;
+      pso.SampleMask = UINT_MAX;
+      D3D12_RASTERIZER_DESC rast{};
+      rast.FillMode = D3D12_FILL_MODE_SOLID;
+      rast.CullMode = D3D12_CULL_MODE_BACK;
+      rast.DepthClipEnable = TRUE;
+      pso.RasterizerState = rast;
+      D3D12_DEPTH_STENCIL_DESC ds{};
+      ds.DepthEnable = TRUE;
+      ds.DepthWriteMask = D3D12_DEPTH_WRITE_MASK_ALL;
+      ds.DepthFunc = D3D12_COMPARISON_FUNC_LESS;
+      pso.DepthStencilState = ds;
+      pso.DSVFormat = dx.DepthFormat();
+      pso.InputLayout = {inputElems, _countof(inputElems)};
+      pso.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE;
+      pso.NumRenderTargets = 4;
+      pso.RTVFormats[0] = DXGI_FORMAT_R8G8B8A8_UNORM;
+      pso.RTVFormats[1] = DXGI_FORMAT_R16G16B16A16_FLOAT;
+      pso.RTVFormats[2] = DXGI_FORMAT_R8G8B8A8_UNORM;
+      pso.RTVFormats[3] = DXGI_FORMAT_R11G11B10_FLOAT;
+      pso.SampleDesc.Count = 1;
+      ComPtr<ID3D12PipelineState> newPso;
+      if (SUCCEEDED(dx.m_device->CreateGraphicsPipelineState(&pso, IID_PPV_ARGS(&newPso))))
+        m_gbufferPso = newPso;
+    } else {
+      if (!vs.success) errors += "[gbuffer.hlsl VS] " + vs.errorMessage + "\n";
+      if (!ps.success) errors += "[gbuffer.hlsl PS] " + ps.errorMessage + "\n";
+    }
+  }
+
+  // ---- Shadow pass (shadow.hlsl) ----
+  {
+    auto vs = CompileShaderSafe(L"shaders/shadow.hlsl", "VSMain", "vs_5_1");
+    if (vs.success) {
+      D3D12_INPUT_ELEMENT_DESC inputElems[] = {
+          {"POSITION", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 0, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0},
+      };
+      D3D12_GRAPHICS_PIPELINE_STATE_DESC pso{};
+      pso.pRootSignature = m_shadowRootSig.Get();
+      pso.VS = {vs.bytecode->GetBufferPointer(), vs.bytecode->GetBufferSize()};
+      pso.PS = {nullptr, 0};
+      D3D12_BLEND_DESC blend{};
+      blend.RenderTarget[0].BlendEnable = FALSE;
+      blend.RenderTarget[0].RenderTargetWriteMask = D3D12_COLOR_WRITE_ENABLE_ALL;
+      pso.BlendState = blend;
+      pso.SampleMask = UINT_MAX;
+      D3D12_RASTERIZER_DESC rast{};
+      rast.FillMode = D3D12_FILL_MODE_SOLID;
+      rast.CullMode = D3D12_CULL_MODE_BACK;
+      rast.DepthClipEnable = TRUE;
+      rast.DepthBias = 1000;
+      rast.SlopeScaledDepthBias = 1.0f;
+      rast.DepthBiasClamp = 0.0f;
+      pso.RasterizerState = rast;
+      D3D12_DEPTH_STENCIL_DESC ds{};
+      ds.DepthEnable = TRUE;
+      ds.DepthWriteMask = D3D12_DEPTH_WRITE_MASK_ALL;
+      ds.DepthFunc = D3D12_COMPARISON_FUNC_LESS;
+      pso.DepthStencilState = ds;
+      pso.DSVFormat = DXGI_FORMAT_D32_FLOAT;
+      pso.InputLayout = {inputElems, _countof(inputElems)};
+      pso.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE;
+      pso.NumRenderTargets = 0;
+      pso.SampleDesc.Count = 1;
+      ComPtr<ID3D12PipelineState> newPso;
+      if (SUCCEEDED(dx.m_device->CreateGraphicsPipelineState(&pso, IID_PPV_ARGS(&newPso))))
+        m_shadowPso = newPso;
+    } else {
+      errors += "[shadow.hlsl VS] " + vs.errorMessage + "\n";
+    }
+  }
+
+  // ---- Wireframe pass (highlight.hlsl) ----
+  {
+    auto vs = CompileShaderSafe(L"shaders/highlight.hlsl", "VSMain", "vs_5_1");
+    auto ps = CompileShaderSafe(L"shaders/highlight.hlsl", "PSMain", "ps_5_1");
+    if (vs.success && ps.success) {
+      D3D12_INPUT_ELEMENT_DESC inputElems[] = {
+          {"POSITION", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 0, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0},
+      };
+      D3D12_GRAPHICS_PIPELINE_STATE_DESC pso{};
+      pso.pRootSignature = m_wireframeRootSig.Get();
+      pso.VS = {vs.bytecode->GetBufferPointer(), vs.bytecode->GetBufferSize()};
+      pso.PS = {ps.bytecode->GetBufferPointer(), ps.bytecode->GetBufferSize()};
+      D3D12_BLEND_DESC blend{};
+      blend.RenderTarget[0].BlendEnable = FALSE;
+      blend.RenderTarget[0].RenderTargetWriteMask = D3D12_COLOR_WRITE_ENABLE_ALL;
+      pso.BlendState = blend;
+      pso.SampleMask = UINT_MAX;
+      D3D12_RASTERIZER_DESC rast{};
+      rast.FillMode = D3D12_FILL_MODE_WIREFRAME;
+      rast.CullMode = D3D12_CULL_MODE_NONE;
+      rast.DepthClipEnable = TRUE;
+      rast.DepthBias = -100;
+      pso.RasterizerState = rast;
+      D3D12_DEPTH_STENCIL_DESC ds{};
+      ds.DepthEnable = TRUE;
+      ds.DepthWriteMask = D3D12_DEPTH_WRITE_MASK_ZERO;
+      ds.DepthFunc = D3D12_COMPARISON_FUNC_LESS_EQUAL;
+      pso.DepthStencilState = ds;
+      pso.DSVFormat = dx.DepthFormat();
+      pso.InputLayout = {inputElems, _countof(inputElems)};
+      pso.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE;
+      pso.NumRenderTargets = 1;
+      pso.RTVFormats[0] = dx.m_hdrFormat;
+      pso.SampleDesc.Count = 1;
+      ComPtr<ID3D12PipelineState> newPso;
+      if (SUCCEEDED(dx.m_device->CreateGraphicsPipelineState(&pso, IID_PPV_ARGS(&newPso))))
+        m_wireframePso = newPso;
+    } else {
+      if (!vs.success) errors += "[highlight.hlsl VS] " + vs.errorMessage + "\n";
+      if (!ps.success) errors += "[highlight.hlsl PS] " + ps.errorMessage + "\n";
+    }
+  }
+
+  return errors;
 }
 
 void MeshRenderer::CreatePipelineOnce(DxContext &dx) {

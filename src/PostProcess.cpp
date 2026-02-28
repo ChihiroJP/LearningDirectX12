@@ -7,6 +7,7 @@
 #include "PostProcess.h"
 #include "DxContext.h"
 #include "DxUtil.h"
+#include "ShaderCompiler.h"
 
 #include <DirectXMath.h>
 #include <cstring>
@@ -691,6 +692,100 @@ void PostProcessRenderer::ExecuteTAA(DxContext &dx,
   dx.SetViewportScissorFull();
   cmd->OMSetRenderTargets(1, &rtv, FALSE, nullptr);
   cmd->DrawInstanced(3, 1, 0, 0);
+}
+
+// Safe fullscreen PSO creation — returns nullptr on failure instead of throwing.
+static ComPtr<ID3D12PipelineState>
+CreateFullscreenPSOSafe(ID3D12Device *device, ID3D12RootSignature *rootSig,
+                        ID3DBlob *vs, ID3DBlob *ps, DXGI_FORMAT rtvFormat,
+                        bool additiveBlend = false) {
+  D3D12_GRAPHICS_PIPELINE_STATE_DESC pso{};
+  pso.pRootSignature = rootSig;
+  pso.VS = {vs->GetBufferPointer(), vs->GetBufferSize()};
+  pso.PS = {ps->GetBufferPointer(), ps->GetBufferSize()};
+  D3D12_BLEND_DESC blend{};
+  blend.RenderTarget[0].RenderTargetWriteMask = D3D12_COLOR_WRITE_ENABLE_ALL;
+  if (additiveBlend) {
+    blend.RenderTarget[0].BlendEnable = TRUE;
+    blend.RenderTarget[0].SrcBlend = D3D12_BLEND_ONE;
+    blend.RenderTarget[0].DestBlend = D3D12_BLEND_ONE;
+    blend.RenderTarget[0].BlendOp = D3D12_BLEND_OP_ADD;
+    blend.RenderTarget[0].SrcBlendAlpha = D3D12_BLEND_ONE;
+    blend.RenderTarget[0].DestBlendAlpha = D3D12_BLEND_ONE;
+    blend.RenderTarget[0].BlendOpAlpha = D3D12_BLEND_OP_ADD;
+  }
+  pso.BlendState = blend;
+  pso.SampleMask = UINT_MAX;
+  D3D12_RASTERIZER_DESC rast{};
+  rast.FillMode = D3D12_FILL_MODE_SOLID;
+  rast.CullMode = D3D12_CULL_MODE_NONE;
+  rast.DepthClipEnable = FALSE;
+  pso.RasterizerState = rast;
+  D3D12_DEPTH_STENCIL_DESC ds{};
+  ds.DepthEnable = FALSE;
+  ds.StencilEnable = FALSE;
+  pso.DepthStencilState = ds;
+  pso.InputLayout = {nullptr, 0};
+  pso.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE;
+  pso.NumRenderTargets = 1;
+  pso.RTVFormats[0] = rtvFormat;
+  pso.SampleDesc.Count = 1;
+  ComPtr<ID3D12PipelineState> result;
+  device->CreateGraphicsPipelineState(&pso, IID_PPV_ARGS(&result));
+  return result;
+}
+
+std::string PostProcessRenderer::ReloadShaders(DxContext &dx) {
+  std::string errors;
+  auto *dev = dx.Device();
+
+  // Helper: compile VS+PS, rebuild PSO, assign if success.
+  auto reloadPair = [&](const wchar_t *file, const char *vsEntry, const char *psEntry,
+                        const char *vsTarget, const char *psTarget,
+                        ID3D12RootSignature *rs, DXGI_FORMAT fmt,
+                        ComPtr<ID3D12PipelineState> &target, bool additive = false) {
+    auto vs = CompileShaderSafe(file, vsEntry, vsTarget);
+    auto ps = CompileShaderSafe(file, psEntry, psTarget);
+    if (vs.success && ps.success) {
+      auto newPso = CreateFullscreenPSOSafe(dev, rs, vs.bytecode.Get(), ps.bytecode.Get(), fmt, additive);
+      if (newPso) target = newPso;
+    } else {
+      if (!vs.success) errors += std::string("[") + psEntry + " VS] " + vs.errorMessage + "\n";
+      if (!ps.success) errors += std::string("[") + psEntry + " PS] " + ps.errorMessage + "\n";
+    }
+  };
+
+  // Bloom
+  reloadPair(L"shaders/bloom.hlsl", "VSFullscreen", "PSDownsample", "vs_5_0", "ps_5_0",
+             m_bloomRootSig.Get(), dx.HdrFormat(), m_bloomDownPso);
+  reloadPair(L"shaders/bloom.hlsl", "VSFullscreen", "PSUpsample", "vs_5_0", "ps_5_0",
+             m_bloomRootSig.Get(), dx.HdrFormat(), m_bloomUpPso, true);
+
+  // Tonemap
+  reloadPair(L"shaders/postprocess.hlsl", "VSFullscreen", "PSMain", "vs_5_0", "ps_5_0",
+             m_tonemapRootSig.Get(), dx.BackBufferFormat(), m_tonemapPso);
+
+  // FXAA
+  reloadPair(L"shaders/fxaa.hlsl", "VSFullscreen", "PSMain", "vs_5_0", "ps_5_0",
+             m_fxaaRootSig.Get(), dx.BackBufferFormat(), m_fxaaPso);
+
+  // Velocity
+  reloadPair(L"shaders/velocity.hlsl", "VSFullscreen", "PSMain", "vs_5_0", "ps_5_0",
+             m_velocityRootSig.Get(), DXGI_FORMAT_R16G16_FLOAT, m_velocityPso);
+
+  // Motion blur
+  reloadPair(L"shaders/motionblur.hlsl", "VSFullscreen", "PSMain", "vs_5_0", "ps_5_0",
+             m_motionBlurRootSig.Get(), dx.BackBufferFormat(), m_motionBlurPso);
+
+  // DOF
+  reloadPair(L"shaders/dof.hlsl", "VSFullscreen", "PSDof", "vs_5_0", "ps_5_0",
+             m_dofRootSig.Get(), dx.BackBufferFormat(), m_dofPso);
+
+  // TAA
+  reloadPair(L"shaders/taa.hlsl", "VSFullscreen", "PSMain", "vs_5_0", "ps_5_0",
+             m_taaRootSig.Get(), dx.HdrFormat(), m_taaPso);
+
+  return errors;
 }
 
 void PostProcessRenderer::Reset() {

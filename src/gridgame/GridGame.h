@@ -19,6 +19,7 @@
 #include <cstdint>
 
 class DxContext;
+struct StageData;
 
 class GridGame {
 public:
@@ -29,6 +30,9 @@ public:
 
   GridGameState GetState() const { return m_state; }
   bool WantsQuit() const { return m_wantsQuit; }
+
+  // Load a stage from editor StageData for play-testing (Phase 5C).
+  void LoadFromStageData(const StageData &stage);
 
 private:
   // State machine handlers.

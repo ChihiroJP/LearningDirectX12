@@ -10,6 +10,8 @@
 #include "Entity.h"
 #include "../RenderPass.h"
 
+#include <nlohmann/json_fwd.hpp>
+
 #include <string>
 #include <vector>
 
@@ -40,6 +42,10 @@ public:
   ScenePostProcessSettings &PostProcessSettings() { return m_postProcessSettings; }
   const ScenePostProcessSettings &PostProcessSettings() const { return m_postProcessSettings; }
 
+  // Camera presets (Phase 6).
+  std::vector<CameraPreset> &CameraPresets() { return m_cameraPresets; }
+  const std::vector<CameraPreset> &CameraPresets() const { return m_cameraPresets; }
+
   // Build FrameData from all active entities.
   void BuildFrameData(FrameData &frame) const;
 
@@ -53,13 +59,20 @@ public:
   bool SaveToFile(const std::string &path) const;
   bool LoadFromFile(const std::string &path, DxContext &dx);
 
+  // In-memory serialization for scene play mode (Phase 8).
+  std::string SerializeToString() const;
+  bool DeserializeFromString(const std::string &jsonStr, DxContext &dx);
+
   // Clear all entities.
   void Clear();
 
 private:
+  void LoadFromJson(const nlohmann::json &j);
+
   std::vector<Entity> m_entities;
   EntityId m_nextId = 1;
   SceneLightSettings m_lightSettings;
   SceneShadowSettings m_shadowSettings;
   ScenePostProcessSettings m_postProcessSettings;
+  std::vector<CameraPreset> m_cameraPresets; // Phase 6
 };

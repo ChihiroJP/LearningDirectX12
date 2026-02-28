@@ -7,6 +7,7 @@
 
 #include <d3d12.h>
 #include <DirectXMath.h>
+#include <string>
 #include <wrl.h>
 
 class DxContext;
@@ -60,6 +61,7 @@ public:
   // TAA (Phase 10.4)
   void ExecuteTAA(DxContext &dx, const PostProcessParams &params);
 
+  std::string ReloadShaders(DxContext &dx);
   void Reset();
 
 private:

@@ -12,6 +12,7 @@
 #include <DirectXMath.h>
 #include <array>
 #include <cstdint>
+#include <string>
 #include <vector>
 
 #include <d3d12.h>
@@ -27,6 +28,7 @@ public:
   void DrawParticles(DxContext &dx, const std::vector<const Emitter*> &emitters,
                      const DirectX::XMMATRIX &view,
                      const DirectX::XMMATRIX &proj);
+  std::string ReloadShaders(DxContext &dx);
   void Reset();
 
 private:

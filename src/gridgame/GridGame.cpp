@@ -6,6 +6,7 @@
 
 #include "GridGame.h"
 #include "GridMaterials.h"
+#include "StageData.h"
 
 #include "../DxContext.h"
 #include "../ProceduralMesh.h"
@@ -95,6 +96,51 @@ void GridGame::LoadTestStage() {
   m_cameraDistance = gridMax * 1.2f;
 
   SpawnPlayerAndCargo();
+}
+
+// ---- Phase 5C: Load from editor StageData ----
+
+void GridGame::LoadFromStageData(const StageData &stage) {
+  const int W = stage.width;
+  const int H = stage.height;
+
+  std::vector<Tile> layout(static_cast<size_t>(W) * H);
+  for (int y = 0; y < H; ++y) {
+    for (int x = 0; x < W; ++x) {
+      const TileData &td = stage.tiles[static_cast<size_t>(y) * W + x];
+      Tile &t = layout[static_cast<size_t>(y) * W + x];
+      t.type = td.type;
+      t.hasWall = td.hasWall;
+      t.wallDestructible = td.wallDestructible;
+    }
+  }
+
+  m_map.Init(W, H, layout);
+
+  // Set player and cargo positions from stage spawn points.
+  m_playerX = stage.playerSpawnX;
+  m_playerY = stage.playerSpawnY;
+  m_cargoX = stage.cargoSpawnX;
+  m_cargoY = stage.cargoSpawnY;
+
+  m_playerVisualPos = m_map.TileCenter(m_playerX, m_playerY);
+  m_playerLerpFrom = m_playerVisualPos;
+  m_playerLerpT = 1.0f;
+
+  m_cargoVisualPos = m_map.TileCenter(m_cargoX, m_cargoY);
+  m_cargoLerpFrom = m_cargoVisualPos;
+  m_cargoLerpT = 1.0f;
+
+  // Camera distance based on grid size.
+  float gridMax = static_cast<float>(W > H ? W : H);
+  m_cameraDistance = gridMax * 1.2f;
+
+  // Reset game state.
+  m_stageTimer = 0.0f;
+  m_moveCount = 0;
+  m_prevUp = m_prevDown = m_prevLeft = m_prevRight = false;
+  m_prevEsc = false;
+  m_state = GridGameState::Playing;
 }
 
 // ---- Phase 2: Movement helpers ----

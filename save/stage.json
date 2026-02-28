@@ -1,6 +1,6 @@
 {
   "cargoSpawn": [
-    0,
+    1,
     2
   ],
   "height": 8,
@@ -69,10 +69,11 @@
       "type": "Wall"
     },
     null,
-    {
-      "type": "Fire"
-    },
     null,
+    {
+      "wall": true,
+      "wallDestructible": true
+    },
     null,
     null,
     null,
@@ -88,7 +89,10 @@
     {
       "type": "Fire"
     },
-    null,
+    {
+      "wall": true,
+      "wallDestructible": true
+    },
     {
       "type": "Fire"
     },
@@ -110,9 +114,13 @@
     },
     null,
     null,
-    null,
     {
-      "type": "Fire"
+      "wall": true,
+      "wallDestructible": true
+    },
+    {
+      "wall": true,
+      "wallDestructible": true
     },
     {
       "type": "Fire"
@@ -139,11 +147,26 @@
     {
       "type": "Spike"
     },
-    null,
-    null,
-    null,
-    null,
-    null,
+    {
+      "wall": true,
+      "wallDestructible": true
+    },
+    {
+      "wall": true,
+      "wallDestructible": true
+    },
+    {
+      "wall": true,
+      "wallDestructible": true
+    },
+    {
+      "wall": true,
+      "wallDestructible": true
+    },
+    {
+      "wall": true,
+      "wallDestructible": true
+    },
     {
       "type": "Crumble"
     },

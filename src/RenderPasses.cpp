@@ -8,6 +8,7 @@
 
 #include "DxContext.h"
 #include "DxUtil.h"
+#include "ShaderCompiler.h"
 #include "GridRenderer.h"
 #include "ImGuiLayer.h"
 #include "MeshRenderer.h"
@@ -300,6 +301,42 @@ void DeferredLightingPass::CreatePipelineOnce(DxContext &dx) {
   ThrowIfFailed(dx.Device()->CreateGraphicsPipelineState(&pso,
                                                          IID_PPV_ARGS(&m_pso)),
                 "Create Deferred Lighting PSO failed");
+}
+
+std::string DeferredLightingPass::ReloadShaders(DxContext &dx) {
+  std::string errors;
+  auto vs = CompileShaderSafe(L"shaders/deferred_lighting.hlsl", "VSFullscreen", "vs_5_1");
+  auto ps = CompileShaderSafe(L"shaders/deferred_lighting.hlsl", "PSMain", "ps_5_1");
+  if (vs.success && ps.success) {
+    D3D12_GRAPHICS_PIPELINE_STATE_DESC pso{};
+    pso.pRootSignature = m_rootSig.Get();
+    pso.VS = {vs.bytecode->GetBufferPointer(), vs.bytecode->GetBufferSize()};
+    pso.PS = {ps.bytecode->GetBufferPointer(), ps.bytecode->GetBufferSize()};
+    D3D12_BLEND_DESC blend{};
+    blend.RenderTarget[0].RenderTargetWriteMask = D3D12_COLOR_WRITE_ENABLE_ALL;
+    pso.BlendState = blend;
+    pso.SampleMask = UINT_MAX;
+    D3D12_RASTERIZER_DESC rast{};
+    rast.FillMode = D3D12_FILL_MODE_SOLID;
+    rast.CullMode = D3D12_CULL_MODE_NONE;
+    rast.DepthClipEnable = FALSE;
+    pso.RasterizerState = rast;
+    D3D12_DEPTH_STENCIL_DESC ds{};
+    ds.DepthEnable = FALSE;
+    pso.DepthStencilState = ds;
+    pso.InputLayout = {nullptr, 0};
+    pso.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE;
+    pso.NumRenderTargets = 1;
+    pso.RTVFormats[0] = dx.HdrFormat();
+    pso.SampleDesc.Count = 1;
+    Microsoft::WRL::ComPtr<ID3D12PipelineState> newPso;
+    if (SUCCEEDED(dx.Device()->CreateGraphicsPipelineState(&pso, IID_PPV_ARGS(&newPso))))
+      m_pso = newPso;
+  } else {
+    if (!vs.success) errors += "[deferred_lighting.hlsl VS] " + vs.errorMessage + "\n";
+    if (!ps.success) errors += "[deferred_lighting.hlsl PS] " + ps.errorMessage + "\n";
+  }
+  return errors;
 }
 
 void DeferredLightingPass::Execute(DxContext &dx, const FrameData &frame) {

@@ -14,22 +14,34 @@
 #include "../gridgame/StageData.h"
 #include "../gridgame/GridEditorCommands.h"
 
+#include <d3d12.h>
 #include <DirectXMath.h>
 #include <array>
 #include <string>
 #include <vector>
 
+class Camera;
 class DxContext;
 struct FrameData;
+
+// ---- Asset Browser types (Phase 7) ----
+enum class AssetType : uint8_t { Mesh, Texture, Scene, Unknown };
+
+struct AssetEntry {
+  std::string path;        // relative to project root
+  std::string displayName; // filename only
+  AssetType type;
+};
 
 class SceneEditor {
 public:
   // Draw all editor ImGui panels. Call once per frame during editor mode.
   // iblEnabled: pointer to IBL toggle (owned by main loop, controls descriptor binding).
   // editStage: pointer to the stage being edited (null if grid editor not used).
+  // cam: pointer to the editor camera (for Phase 6 camera panel).
   void DrawUI(Scene &scene, DxContext &dx, const DirectX::XMMATRIX &view,
               const DirectX::XMMATRIX &proj, bool *iblEnabled = nullptr,
-              StageData *editStage = nullptr);
+              StageData *editStage = nullptr, Camera *cam = nullptr);
 
   // Add wireframe highlight for the selected entity into frame.highlightItems.
   void BuildHighlightItems(const Scene &scene, FrameData &frame) const;
@@ -70,7 +82,32 @@ public:
   void InitEditorMeshes(DxContext &dx);
 
   // Build 3D render items from StageData into frame.opaqueItems.
+  // Includes attack preview overlay for the selected tower.
   void BuildStageViewportItems(const StageData &stage, FrameData &frame) const;
+
+  // Pick a tower by clicking near its cone in the viewport. Returns tower index or -1.
+  int ViewportPickTower(const StageData &stage, int screenX, int screenY,
+                        int screenW, int screenH,
+                        const DirectX::XMMATRIX &view,
+                        const DirectX::XMMATRIX &proj) const;
+
+  // Selected tower index (for external read/write).
+  int SelectedTower() const { return m_selectedTower; }
+  void SelectTower(int idx) { m_selectedTower = idx; }
+
+  // Play-test request flag — set by DrawGridEditorPanel, consumed by main.cpp.
+  bool ConsumePlayTestRequest() {
+    bool r = m_playTestRequested;
+    m_playTestRequested = false;
+    return r;
+  }
+
+  // Scene play mode request flag — set by DrawMenuBar, consumed by main.cpp (Phase 8).
+  bool ConsumeScenePlayRequest() {
+    bool r = m_scenePlayRequested;
+    m_scenePlayRequested = false;
+    return r;
+  }
 
   // Viewport tile painting: apply brush to tile under cursor during drag.
   void HandleViewportTilePaint(StageData &stage, int screenX, int screenY,
@@ -88,7 +125,10 @@ private:
   void DrawLightingPanel(Scene &scene, bool *iblEnabled);
   void DrawShadowPanel(Scene &scene, DxContext &dx);
   void DrawPostProcessPanel(Scene &scene, DxContext &dx);
+  void DrawCameraPanel(Scene &scene, Camera &cam);
   void DrawGridEditorPanel(StageData &stage);
+  void DrawAssetBrowser(Scene &scene, DxContext &dx);
+  void ScanAssetDirectory();
   void ProcessHotkeys(Scene &scene, DxContext &dx);
 
   // Ray-plane intersection: screen pixel → tile coordinate on y=0 plane.
@@ -128,6 +168,9 @@ private:
   bool m_ppDragActive = false;
   ScenePostProcessSettings m_ppDragStart;
 
+  // ---- Camera panel state (Phase 6) ----
+  char m_presetName[64] = "Preset";
+
   // ---- Grid Editor state (Phase 5) ----
   bool m_gridEditorOpen = false;
   CommandHistory m_gridHistory;
@@ -166,4 +209,17 @@ private:
   bool m_editorMeshesInitialized = false;
   bool m_viewportPainting = false;
   std::vector<PaintTilesCommand::Entry> m_viewportPaintStroke;
+
+  // ---- Play-test request (Phase 5C) ----
+  bool m_playTestRequested = false;
+
+  // ---- Scene play mode request (Phase 8) ----
+  bool m_scenePlayRequested = false;
+
+  // ---- Asset Browser state (Phase 7) ----
+  std::vector<AssetEntry> m_assetCache;
+  bool m_assetCacheValid = false;
+  int m_assetFilterType = 0; // 0=All, 1=Meshes, 2=Textures, 3=Scenes
+  int m_selectedAssetIndex = -1;
+  std::string m_previewTexturePath; // path of currently loaded preview
 };

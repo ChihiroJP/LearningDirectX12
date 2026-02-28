@@ -26,3 +26,6 @@ Makefile
 *.lib
 *.exp
 
+.cache
+.claude
+.idea

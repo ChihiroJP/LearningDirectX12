@@ -7,6 +7,7 @@
 #include "SSAORenderer.h"
 #include "DxContext.h"
 #include "DxUtil.h"
+#include "ShaderCompiler.h"
 
 #include <DirectXPackedVector.h>
 #include <cstring>
@@ -468,6 +469,82 @@ void SSAORenderer::ExecuteBlur(DxContext &dx) {
   auto rtv = dx.SsaoBlurRtv();
   cmd->OMSetRenderTargets(1, &rtv, FALSE, nullptr);
   cmd->DrawInstanced(3, 1, 0, 0);
+}
+
+std::string SSAORenderer::ReloadShaders(DxContext &dx) {
+  std::string errors;
+
+  // SSAO generation PSO
+  {
+    auto vs = CompileShaderSafe(L"shaders/ssao.hlsl", "VSFullscreen", "vs_5_0");
+    auto ps = CompileShaderSafe(L"shaders/ssao.hlsl", "PSGenerateSSAO", "ps_5_0");
+    if (vs.success && ps.success) {
+      D3D12_GRAPHICS_PIPELINE_STATE_DESC pso{};
+      pso.pRootSignature = m_ssaoRootSig.Get();
+      pso.VS = {vs.bytecode->GetBufferPointer(), vs.bytecode->GetBufferSize()};
+      pso.PS = {ps.bytecode->GetBufferPointer(), ps.bytecode->GetBufferSize()};
+      D3D12_BLEND_DESC blend{};
+      blend.RenderTarget[0].RenderTargetWriteMask = D3D12_COLOR_WRITE_ENABLE_ALL;
+      pso.BlendState = blend;
+      pso.SampleMask = UINT_MAX;
+      D3D12_RASTERIZER_DESC rast{};
+      rast.FillMode = D3D12_FILL_MODE_SOLID;
+      rast.CullMode = D3D12_CULL_MODE_NONE;
+      rast.DepthClipEnable = FALSE;
+      pso.RasterizerState = rast;
+      D3D12_DEPTH_STENCIL_DESC ds{};
+      ds.DepthEnable = FALSE;
+      pso.DepthStencilState = ds;
+      pso.InputLayout = {nullptr, 0};
+      pso.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE;
+      pso.NumRenderTargets = 1;
+      pso.RTVFormats[0] = DXGI_FORMAT_R8_UNORM;
+      pso.SampleDesc.Count = 1;
+      ComPtr<ID3D12PipelineState> newPso;
+      if (SUCCEEDED(dx.m_device->CreateGraphicsPipelineState(&pso, IID_PPV_ARGS(&newPso))))
+        m_ssaoPso = newPso;
+    } else {
+      if (!vs.success) errors += "[ssao.hlsl VS] " + vs.errorMessage + "\n";
+      if (!ps.success) errors += "[ssao.hlsl SSAO PS] " + ps.errorMessage + "\n";
+    }
+  }
+
+  // Bilateral blur PSO
+  {
+    auto vs = CompileShaderSafe(L"shaders/ssao.hlsl", "VSFullscreen", "vs_5_0");
+    auto ps = CompileShaderSafe(L"shaders/ssao.hlsl", "PSBilateralBlur", "ps_5_0");
+    if (vs.success && ps.success) {
+      D3D12_GRAPHICS_PIPELINE_STATE_DESC pso{};
+      pso.pRootSignature = m_blurRootSig.Get();
+      pso.VS = {vs.bytecode->GetBufferPointer(), vs.bytecode->GetBufferSize()};
+      pso.PS = {ps.bytecode->GetBufferPointer(), ps.bytecode->GetBufferSize()};
+      D3D12_BLEND_DESC blend{};
+      blend.RenderTarget[0].RenderTargetWriteMask = D3D12_COLOR_WRITE_ENABLE_ALL;
+      pso.BlendState = blend;
+      pso.SampleMask = UINT_MAX;
+      D3D12_RASTERIZER_DESC rast{};
+      rast.FillMode = D3D12_FILL_MODE_SOLID;
+      rast.CullMode = D3D12_CULL_MODE_NONE;
+      rast.DepthClipEnable = FALSE;
+      pso.RasterizerState = rast;
+      D3D12_DEPTH_STENCIL_DESC ds{};
+      ds.DepthEnable = FALSE;
+      pso.DepthStencilState = ds;
+      pso.InputLayout = {nullptr, 0};
+      pso.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE;
+      pso.NumRenderTargets = 1;
+      pso.RTVFormats[0] = DXGI_FORMAT_R8_UNORM;
+      pso.SampleDesc.Count = 1;
+      ComPtr<ID3D12PipelineState> newPso;
+      if (SUCCEEDED(dx.m_device->CreateGraphicsPipelineState(&pso, IID_PPV_ARGS(&newPso))))
+        m_blurPso = newPso;
+    } else {
+      if (!vs.success) errors += "[ssao.hlsl blur VS] " + vs.errorMessage + "\n";
+      if (!ps.success) errors += "[ssao.hlsl blur PS] " + ps.errorMessage + "\n";
+    }
+  }
+
+  return errors;
 }
 
 void SSAORenderer::Reset() {

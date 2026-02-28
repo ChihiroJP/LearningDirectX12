@@ -205,17 +205,32 @@ void Scene::CreateEntityMeshGpu(DxContext &dx, Entity &entity) {
 
 // ---- JSON serialization ----
 
-bool Scene::SaveToFile(const std::string &path) const {
+// Build the scene JSON object (shared by SaveToFile and SerializeToString).
+static json BuildSceneJson(const Scene &scene) {
   json j;
-  j["nextId"] = m_nextId;
+  // Access private state through public API.
+  j["lightSettings"] = SceneLightSettingsToJson(scene.LightSettings());
+  j["shadowSettings"] = SceneShadowSettingsToJson(scene.ShadowSettings());
+  j["postProcessSettings"] = ScenePostProcessSettingsToJson(scene.PostProcessSettings());
 
   json entArr = json::array();
-  for (const auto &e : m_entities)
+  for (const auto &e : scene.Entities())
     entArr.push_back(EntityToJson(e));
   j["entities"] = entArr;
-  j["lightSettings"] = SceneLightSettingsToJson(m_lightSettings);
-  j["shadowSettings"] = SceneShadowSettingsToJson(m_shadowSettings);
-  j["postProcessSettings"] = ScenePostProcessSettingsToJson(m_postProcessSettings);
+
+  if (!scene.CameraPresets().empty()) {
+    json presetsArr = json::array();
+    for (const auto &p : scene.CameraPresets())
+      presetsArr.push_back(CameraPresetToJson(p));
+    j["cameraPresets"] = presetsArr;
+  }
+
+  return j;
+}
+
+bool Scene::SaveToFile(const std::string &path) const {
+  json j = BuildSceneJson(*this);
+  j["nextId"] = m_nextId;
 
   std::ofstream file(path);
   if (!file.is_open())
@@ -225,20 +240,8 @@ bool Scene::SaveToFile(const std::string &path) const {
   return file.good();
 }
 
-bool Scene::LoadFromFile(const std::string &path, DxContext &dx) {
-  std::ifstream file(path);
-  if (!file.is_open())
-    return false;
-
-  json j;
-  try {
-    file >> j;
-  } catch (const json::parse_error &) {
-    return false;
-  }
-
-  Clear();
-
+// Restore scene state from a parsed JSON object (shared by LoadFromFile and DeserializeFromString).
+void Scene::LoadFromJson(const json &j) {
   if (j.contains("nextId"))
     m_nextId = j["nextId"].get<EntityId>();
 
@@ -257,13 +260,52 @@ bool Scene::LoadFromFile(const std::string &path, DxContext &dx) {
   else
     m_postProcessSettings = ScenePostProcessSettings{};
 
+  m_cameraPresets.clear();
+  if (j.contains("cameraPresets") && j["cameraPresets"].is_array()) {
+    for (const auto &pj : j["cameraPresets"])
+      m_cameraPresets.push_back(JsonToCameraPreset(pj));
+  }
+
   if (j.contains("entities") && j["entities"].is_array()) {
     for (const auto &ej : j["entities"])
       m_entities.push_back(JsonToEntity(ej));
   }
+}
 
-  // Recreate GPU resources for all mesh entities.
+bool Scene::LoadFromFile(const std::string &path, DxContext &dx) {
+  std::ifstream file(path);
+  if (!file.is_open())
+    return false;
+
+  json j;
+  try {
+    file >> j;
+  } catch (const json::parse_error &) {
+    return false;
+  }
+
+  Clear();
+  LoadFromJson(j);
   CreateGpuResources(dx);
+  return true;
+}
 
+std::string Scene::SerializeToString() const {
+  json j = BuildSceneJson(*this);
+  j["nextId"] = m_nextId;
+  return j.dump();
+}
+
+bool Scene::DeserializeFromString(const std::string &jsonStr, DxContext &dx) {
+  json j;
+  try {
+    j = json::parse(jsonStr);
+  } catch (const json::parse_error &) {
+    return false;
+  }
+
+  Clear();
+  LoadFromJson(j);
+  CreateGpuResources(dx);
   return true;
 }

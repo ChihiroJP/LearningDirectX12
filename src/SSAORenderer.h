@@ -8,6 +8,7 @@
 
 #include <DirectXMath.h>
 #include <d3d12.h>
+#include <string>
 #include <wrl.h>
 
 class DxContext;
@@ -19,6 +20,7 @@ public:
                    const DirectX::XMMATRIX &view,
                    float radius, float bias, float power, int kernelSize);
   void ExecuteBlur(DxContext &dx);
+  std::string ReloadShaders(DxContext &dx);
   void Reset();
 
 private:

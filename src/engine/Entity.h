@@ -6,6 +6,7 @@
 
 #pragma once
 
+#include "../Camera.h"
 #include "../Lighting.h"
 
 #include <DirectXMath.h>
@@ -13,6 +14,7 @@
 #include <cstdint>
 #include <optional>
 #include <string>
+#include <vector>
 
 #include <nlohmann/json_fwd.hpp>
 
@@ -160,3 +162,7 @@ SceneShadowSettings JsonToSceneShadowSettings(const nlohmann::json &j);
 
 nlohmann::json ScenePostProcessSettingsToJson(const ScenePostProcessSettings &s);
 ScenePostProcessSettings JsonToScenePostProcessSettings(const nlohmann::json &j);
+
+// Camera preset serialization (Phase 6).
+nlohmann::json CameraPresetToJson(const CameraPreset &p);
+CameraPreset JsonToCameraPreset(const nlohmann::json &j);

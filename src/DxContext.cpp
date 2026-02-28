@@ -209,7 +209,7 @@ ParticleRenderer &DxContext::GetParticleRenderer() {
 void DxContext::CreateImGuiResources() {
   D3D12_DESCRIPTOR_HEAP_DESC heap{};
   heap.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
-  heap.NumDescriptors = 128;
+  heap.NumDescriptors = 256;
   heap.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
   ThrowIfFailed(
       m_device->CreateDescriptorHeap(&heap, IID_PPV_ARGS(&m_imguiSrvHeap)),
@@ -541,6 +541,13 @@ void DxContext::ImGuiAllocSrv(D3D12_CPU_DESCRIPTOR_HANDLE *outCpu,
   ++m_imguiSrvNext;
   *outCpu = cpu;
   *outGpu = gpu;
+}
+
+void DxContext::RequestPreviewTexture(const LoadedImage &img) {
+  if (img.pixels.empty() || img.width <= 0 || img.height <= 0)
+    return;
+  // Store a copy; the actual GPU upload happens in BeginFrame.
+  m_pendingPreview = img;
 }
 
 // ---- Post-process resources ----
@@ -1309,6 +1316,98 @@ void DxContext::BeginFrame() {
 
   // Reset per-frame constants ring.
   m_frames[m_frameIndex].constantsOffset = 0;
+
+  // ---- Process pending preview texture upload (Phase 7 Asset Browser) ----
+  if (!m_pendingPreview.pixels.empty()) {
+    if (!m_previewSrvAllocated) {
+      ImGuiAllocSrv(&m_previewSrvCpu, &m_previewSrvGpu);
+      m_previewSrvAllocated = true;
+    }
+
+    const auto &img = m_pendingPreview;
+
+    D3D12_RESOURCE_DESC texDesc{};
+    texDesc.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
+    texDesc.Width = static_cast<UINT64>(img.width);
+    texDesc.Height = static_cast<UINT>(img.height);
+    texDesc.DepthOrArraySize = 1;
+    texDesc.MipLevels = 1;
+    texDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+    texDesc.SampleDesc.Count = 1;
+    texDesc.Layout = D3D12_TEXTURE_LAYOUT_UNKNOWN;
+
+    D3D12_HEAP_PROPERTIES defaultHeap{};
+    defaultHeap.Type = D3D12_HEAP_TYPE_DEFAULT;
+
+    m_previewTex.Reset();
+    ThrowIfFailed(m_device->CreateCommittedResource(
+        &defaultHeap, D3D12_HEAP_FLAG_NONE, &texDesc,
+        D3D12_RESOURCE_STATE_COPY_DEST, nullptr,
+        IID_PPV_ARGS(&m_previewTex)),
+        "Preview: CreateCommittedResource failed");
+
+    D3D12_PLACED_SUBRESOURCE_FOOTPRINT footprint{};
+    UINT numRows = 0;
+    UINT64 rowSizeBytes = 0;
+    UINT64 uploadBufferSize = 0;
+    m_device->GetCopyableFootprints(&texDesc, 0, 1, 0, &footprint, &numRows,
+                                    &rowSizeBytes, &uploadBufferSize);
+
+    D3D12_HEAP_PROPERTIES uploadHeap{};
+    uploadHeap.Type = D3D12_HEAP_TYPE_UPLOAD;
+
+    D3D12_RESOURCE_DESC bufDesc{};
+    bufDesc.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
+    bufDesc.Width = uploadBufferSize;
+    bufDesc.Height = 1;
+    bufDesc.DepthOrArraySize = 1;
+    bufDesc.MipLevels = 1;
+    bufDesc.SampleDesc.Count = 1;
+    bufDesc.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
+
+    m_previewUpload.Reset();
+    ThrowIfFailed(m_device->CreateCommittedResource(
+        &uploadHeap, D3D12_HEAP_FLAG_NONE, &bufDesc,
+        D3D12_RESOURCE_STATE_GENERIC_READ, nullptr,
+        IID_PPV_ARGS(&m_previewUpload)),
+        "Preview: upload buffer failed");
+
+    void *mapped = nullptr;
+    m_previewUpload->Map(0, nullptr, &mapped);
+    auto *dest = reinterpret_cast<uint8_t *>(mapped);
+    const uint8_t *srcData = img.pixels.data();
+    for (UINT y = 0; y < numRows; ++y) {
+      memcpy(dest + footprint.Offset + y * footprint.Footprint.RowPitch,
+             srcData + y * (img.width * 4),
+             static_cast<size_t>(img.width * 4));
+    }
+    m_previewUpload->Unmap(0, nullptr);
+
+    D3D12_TEXTURE_COPY_LOCATION srcLoc{};
+    srcLoc.pResource = m_previewUpload.Get();
+    srcLoc.Type = D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT;
+    srcLoc.PlacedFootprint = footprint;
+
+    D3D12_TEXTURE_COPY_LOCATION dstLoc{};
+    dstLoc.pResource = m_previewTex.Get();
+    dstLoc.Type = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
+    dstLoc.SubresourceIndex = 0;
+
+    m_cmdList->CopyTextureRegion(&dstLoc, 0, 0, 0, &srcLoc, nullptr);
+
+    Transition(m_previewTex.Get(), D3D12_RESOURCE_STATE_COPY_DEST,
+               D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+
+    D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc{};
+    srvDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+    srvDesc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
+    srvDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+    srvDesc.Texture2D.MipLevels = 1;
+    m_device->CreateShaderResourceView(m_previewTex.Get(), &srvDesc,
+                                       m_previewSrvCpu);
+
+    m_pendingPreview.pixels.clear(); // consumed
+  }
 
   // Transition backbuffer to render target.
   Transition(CurrentBackBuffer(), D3D12_RESOURCE_STATE_PRESENT,

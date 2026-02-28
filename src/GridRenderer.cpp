@@ -7,6 +7,7 @@
 #include "GridRenderer.h"
 #include "DxContext.h"
 #include "DxUtil.h"
+#include "ShaderCompiler.h"
 
 #include <cstring>
 #include <d3dcompiler.h>
@@ -233,6 +234,49 @@ void GridRenderer::Draw(DxContext &dx, const DirectX::XMMATRIX &view,
   dx.m_cmdList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_LINELIST);
   dx.m_cmdList->IASetVertexBuffers(0, 1, &m_vbView);
   dx.m_cmdList->DrawInstanced(m_vertexCount, 1, 0, 0);
+}
+
+std::string GridRenderer::ReloadShaders(DxContext &dx) {
+  std::string errors;
+  auto vs = CompileShaderSafe(L"shaders/basic3d.hlsl", "VSMain", "vs_5_0");
+  auto ps = CompileShaderSafe(L"shaders/basic3d.hlsl", "PSMain", "ps_5_0");
+  if (vs.success && ps.success) {
+    D3D12_INPUT_ELEMENT_DESC inputElems[] = {
+        {"POSITION", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 0, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0},
+        {"COLOR", 0, DXGI_FORMAT_R32G32B32A32_FLOAT, 0, 12, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0},
+    };
+    D3D12_GRAPHICS_PIPELINE_STATE_DESC pso{};
+    pso.pRootSignature = m_rootSig.Get();
+    pso.VS = {vs.bytecode->GetBufferPointer(), vs.bytecode->GetBufferSize()};
+    pso.PS = {ps.bytecode->GetBufferPointer(), ps.bytecode->GetBufferSize()};
+    D3D12_BLEND_DESC blend{};
+    blend.RenderTarget[0].RenderTargetWriteMask = D3D12_COLOR_WRITE_ENABLE_ALL;
+    pso.BlendState = blend;
+    pso.SampleMask = UINT_MAX;
+    D3D12_RASTERIZER_DESC rast{};
+    rast.FillMode = D3D12_FILL_MODE_SOLID;
+    rast.CullMode = D3D12_CULL_MODE_NONE;
+    rast.DepthClipEnable = TRUE;
+    pso.RasterizerState = rast;
+    D3D12_DEPTH_STENCIL_DESC ds{};
+    ds.DepthEnable = TRUE;
+    ds.DepthWriteMask = D3D12_DEPTH_WRITE_MASK_ALL;
+    ds.DepthFunc = D3D12_COMPARISON_FUNC_LESS_EQUAL;
+    pso.DepthStencilState = ds;
+    pso.DSVFormat = dx.m_depthFormat;
+    pso.InputLayout = {inputElems, _countof(inputElems)};
+    pso.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_LINE;
+    pso.NumRenderTargets = 1;
+    pso.RTVFormats[0] = dx.m_hdrFormat;
+    pso.SampleDesc.Count = 1;
+    ComPtr<ID3D12PipelineState> newPso;
+    if (SUCCEEDED(dx.m_device->CreateGraphicsPipelineState(&pso, IID_PPV_ARGS(&newPso))))
+      m_pso = newPso;
+  } else {
+    if (!vs.success) errors += "[basic3d.hlsl VS] " + vs.errorMessage + "\n";
+    if (!ps.success) errors += "[basic3d.hlsl PS] " + ps.errorMessage + "\n";
+  }
+  return errors;
 }
 
 void GridRenderer::Reset() {

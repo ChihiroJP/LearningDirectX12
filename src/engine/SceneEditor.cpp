@@ -6,6 +6,7 @@
 // ======================================
 
 #include "SceneEditor.h"
+#include "../Camera.h"
 #include "Commands.h"
 #include "../DxContext.h"
 #include "../ProceduralMesh.h"
@@ -20,6 +21,7 @@
 #include <cmath>
 #include <cstdio>
 #include <cstring>
+#include <filesystem>
 
 #include <windows.h>
 #include <commdlg.h>
@@ -69,7 +71,8 @@ void SceneEditor::DrawUI(Scene &scene, DxContext &dx,
                           const DirectX::XMMATRIX &view,
                           const DirectX::XMMATRIX &proj,
                           bool *iblEnabled,
-                          StageData *editStage) {
+                          StageData *editStage,
+                          Camera *cam) {
   // Process hotkeys first (undo/redo/duplicate/gizmo mode).
   ProcessHotkeys(scene, dx);
 
@@ -83,6 +86,9 @@ void SceneEditor::DrawUI(Scene &scene, DxContext &dx,
   DrawLightingPanel(scene, iblEnabled);
   DrawShadowPanel(scene, dx);
   DrawPostProcessPanel(scene, dx);
+  if (cam)
+    DrawCameraPanel(scene, *cam);
+  DrawAssetBrowser(scene, dx);
   if (m_gridEditorOpen && editStage)
     DrawGridEditorPanel(*editStage);
   m_gizmo.DrawToolbar();
@@ -195,6 +201,11 @@ void SceneEditor::DrawMenuBar(Scene &scene, DxContext &dx) {
       }
       ImGui::EndMenu();
     }
+
+    // Play Scene button (Phase 8).
+    ImGui::Separator();
+    if (ImGui::MenuItem("Play Scene", "F5"))
+      m_scenePlayRequested = true;
 
     ImGui::EndMainMenuBar();
   }
@@ -361,6 +372,31 @@ void SceneEditor::DrawInspector(Scene &scene, DxContext &dx) {
     if (ImGui::CollapsingHeader("Mesh Component",
                                 ImGuiTreeNodeFlags_DefaultOpen)) {
       auto &mc = e->mesh.value();
+
+      // Drop target: accept mesh files dragged from Asset Browser.
+      if (ImGui::BeginDragDropTarget()) {
+        if (const ImGuiPayload *payload =
+                ImGui::AcceptDragDropPayload("ASSET_PATH")) {
+          std::string droppedPath(static_cast<const char *>(payload->Data));
+          std::string ext;
+          auto dotPos = droppedPath.rfind('.');
+          if (dotPos != std::string::npos)
+            ext = droppedPath.substr(dotPos);
+          for (auto &c : ext)
+            c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+          if (ext == ".gltf" || ext == ".glb") {
+            Material oldMat = mc.material;
+            auto oldPaths = mc.texturePaths;
+            mc.sourceType = MeshSourceType::GltfFile;
+            mc.gltfPath = droppedPath;
+            mc.meshId = UINT32_MAX;
+            m_history.Execute(std::make_unique<MaterialCommand>(
+                scene, dx, e->id, oldMat, mc.material, oldPaths,
+                mc.texturePaths));
+          }
+        }
+        ImGui::EndDragDropTarget();
+      }
 
       int srcType = static_cast<int>(mc.sourceType);
       bool meshChanged = false;
@@ -547,6 +583,40 @@ void SceneEditor::DrawInspector(Scene &scene, DxContext &dx) {
               m_history.Execute(std::make_unique<MaterialCommand>(
                   scene, dx, e->id, oldMat, mat, oldPaths, mc.texturePaths));
               matChanged = true;
+            }
+          }
+
+          // Drop target: accept texture files from Asset Browser.
+          // Use an invisible button as drop area for this slot row.
+          {
+            char dropLabel[64];
+            snprintf(dropLabel, sizeof(dropLabel), "##TexDrop%d", i);
+            ImGui::SameLine();
+            ImGui::SmallButton(dropLabel);
+            if (ImGui::BeginDragDropTarget()) {
+              if (const ImGuiPayload *payload =
+                      ImGui::AcceptDragDropPayload("ASSET_PATH")) {
+                std::string droppedPath(
+                    static_cast<const char *>(payload->Data));
+                std::string ext2;
+                auto dotPos2 = droppedPath.rfind('.');
+                if (dotPos2 != std::string::npos)
+                  ext2 = droppedPath.substr(dotPos2);
+                for (auto &c : ext2)
+                  c = static_cast<char>(
+                      std::tolower(static_cast<unsigned char>(c)));
+                if (ext2 == ".png" || ext2 == ".jpg" || ext2 == ".jpeg" ||
+                    ext2 == ".bmp" || ext2 == ".tga") {
+                  Material oldMat = mat;
+                  auto oldPaths = mc.texturePaths;
+                  mc.texturePaths[i] = droppedPath;
+                  m_history.Execute(std::make_unique<MaterialCommand>(
+                      scene, dx, e->id, oldMat, mat, oldPaths,
+                      mc.texturePaths));
+                  matChanged = true;
+                }
+              }
+              ImGui::EndDragDropTarget();
             }
           }
 
@@ -1114,10 +1184,351 @@ static bool OpenStageFileDialog(char *outPath, size_t maxLen, bool save) {
   return save ? GetSaveFileNameA(&ofn) != 0 : GetOpenFileNameA(&ofn) != 0;
 }
 
+// ---- Camera Panel (Phase 6) ----
+
+void SceneEditor::DrawCameraPanel(Scene &scene, Camera &cam) {
+  ImGui::SetNextWindowSize(ImVec2(300, 400), ImGuiCond_FirstUseEver);
+  ImGui::SetNextWindowCollapsed(true, ImGuiCond_FirstUseEver);
+  ImGui::Begin("Camera");
+
+  // Mode selector.
+  int modeInt = static_cast<int>(cam.Mode());
+  const char *modeNames[] = {"Free Fly", "Orbit", "Game (Top-Down)"};
+  if (ImGui::Combo("Mode", &modeInt, modeNames, 3)) {
+    cam.SetMode(static_cast<CameraMode>(modeInt));
+  }
+
+  ImGui::Separator();
+
+  // Position display (read-only in orbit/game, editable in free-fly).
+  DirectX::XMFLOAT3 pos = cam.GetPosition();
+  if (cam.Mode() == CameraMode::FreeFly) {
+    if (ImGui::DragFloat3("Position", &pos.x, 0.1f)) {
+      cam.SetPosition(pos.x, pos.y, pos.z);
+    }
+    float yaw = DirectX::XMConvertToDegrees(cam.Yaw());
+    float pitch = DirectX::XMConvertToDegrees(cam.Pitch());
+    if (ImGui::DragFloat("Yaw", &yaw, 0.5f, -180.0f, 180.0f)) {
+      cam.SetYawPitch(DirectX::XMConvertToRadians(yaw), cam.Pitch());
+    }
+    if (ImGui::DragFloat("Pitch", &pitch, 0.5f, -89.0f, 89.0f)) {
+      cam.SetYawPitch(cam.Yaw(), DirectX::XMConvertToRadians(pitch));
+    }
+  } else {
+    ImGui::Text("Position: %.2f, %.2f, %.2f", pos.x, pos.y, pos.z);
+  }
+
+  // Orbit-specific controls.
+  if (cam.Mode() == CameraMode::Orbit) {
+    DirectX::XMFLOAT3 target = cam.OrbitTarget();
+    if (ImGui::DragFloat3("Orbit Target", &target.x, 0.1f)) {
+      cam.SetOrbitTarget(target.x, target.y, target.z);
+    }
+    float dist = cam.OrbitDistance();
+    if (ImGui::DragFloat("Distance", &dist, 0.1f, 0.5f, 500.0f)) {
+      cam.SetOrbitDistance(dist);
+    }
+  }
+
+  ImGui::Separator();
+
+  // Lens settings.
+  float fovDeg = DirectX::XMConvertToDegrees(cam.FovY());
+  float nearZ = cam.NearZ();
+  float farZ = cam.FarZ();
+  bool lensChanged = false;
+  lensChanged |= ImGui::SliderFloat("FOV (deg)", &fovDeg, 10.0f, 120.0f);
+  lensChanged |= ImGui::DragFloat("Near Plane", &nearZ, 0.01f, 0.001f, 10.0f, "%.3f");
+  lensChanged |= ImGui::DragFloat("Far Plane", &farZ, 1.0f, 10.0f, 10000.0f, "%.0f");
+  if (lensChanged) {
+    cam.SetLens(DirectX::XMConvertToRadians(fovDeg), cam.Aspect(), nearZ, farZ);
+  }
+
+  ImGui::Separator();
+
+  // Speed controls.
+  float moveSpeed = cam.MoveSpeed();
+  float lookSpeed = cam.LookSpeed() * 1000.0f; // display in mrad for readability
+  if (ImGui::DragFloat("Move Speed", &moveSpeed, 0.1f, 0.1f, 100.0f))
+    cam.SetMoveSpeed(moveSpeed);
+  if (ImGui::DragFloat("Look Speed", &lookSpeed, 0.1f, 0.1f, 20.0f))
+    cam.SetLookSpeed(lookSpeed * 0.001f);
+
+  ImGui::Separator();
+
+  // ---- Camera presets ----
+  ImGui::Text("Presets");
+  auto &presets = scene.CameraPresets();
+
+  ImGui::InputText("Name", m_presetName, sizeof(m_presetName));
+  ImGui::SameLine();
+  if (ImGui::Button("Save")) {
+    presets.push_back(cam.MakePreset(m_presetName));
+  }
+
+  // List saved presets.
+  int deleteIdx = -1;
+  for (int i = 0; i < static_cast<int>(presets.size()); ++i) {
+    ImGui::PushID(i);
+    if (ImGui::Button("Load")) {
+      cam.ApplyPreset(presets[i]);
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("X")) {
+      deleteIdx = i;
+    }
+    ImGui::SameLine();
+    ImGui::Text("%s", presets[i].name.c_str());
+    ImGui::PopID();
+  }
+  if (deleteIdx >= 0) {
+    presets.erase(presets.begin() + deleteIdx);
+  }
+
+  ImGui::End();
+}
+
+// ---- Asset Browser (Phase 7) ----
+
+static AssetType ClassifyAsset(const std::string &ext) {
+  if (ext == ".gltf" || ext == ".glb")
+    return AssetType::Mesh;
+  if (ext == ".png" || ext == ".jpg" || ext == ".jpeg" || ext == ".bmp" ||
+      ext == ".tga")
+    return AssetType::Texture;
+  if (ext == ".json")
+    return AssetType::Scene;
+  return AssetType::Unknown;
+}
+
+void SceneEditor::ScanAssetDirectory() {
+  m_assetCache.clear();
+  namespace fs = std::filesystem;
+  const fs::path root("Assets");
+  if (!fs::exists(root) || !fs::is_directory(root))
+    return;
+
+  for (auto &entry : fs::recursive_directory_iterator(root)) {
+    if (!entry.is_regular_file())
+      continue;
+    std::string ext = entry.path().extension().string();
+    // lowercase extension
+    for (auto &c : ext)
+      c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+
+    AssetType type = ClassifyAsset(ext);
+    if (type == AssetType::Unknown)
+      continue;
+
+    AssetEntry ae;
+    ae.path = entry.path().generic_string(); // forward slashes
+    ae.displayName = entry.path().filename().string();
+    ae.type = type;
+    m_assetCache.push_back(std::move(ae));
+  }
+
+  // Sort by path for consistent display.
+  std::sort(m_assetCache.begin(), m_assetCache.end(),
+            [](const AssetEntry &a, const AssetEntry &b) {
+              return a.path < b.path;
+            });
+
+  m_assetCacheValid = true;
+  m_selectedAssetIndex = -1;
+}
+
+void SceneEditor::DrawAssetBrowser(Scene &scene, DxContext &dx) {
+  ImGui::SetNextWindowPos(ImVec2(0, 400), ImGuiCond_FirstUseEver);
+  ImGui::SetNextWindowSize(ImVec2(300, 350), ImGuiCond_FirstUseEver);
+  ImGui::Begin("Asset Browser");
+
+  // Scan / Refresh.
+  if (!m_assetCacheValid || ImGui::Button("Refresh")) {
+    ScanAssetDirectory();
+  }
+
+  if (m_assetCache.empty()) {
+    ImGui::TextDisabled("No assets found in Assets/");
+    ImGui::End();
+    return;
+  }
+
+  // Filter combo.
+  const char *filterLabels[] = {"All", "Meshes", "Textures", "Scenes"};
+  ImGui::Combo("Filter", &m_assetFilterType, filterLabels,
+               IM_ARRAYSIZE(filterLabels));
+
+  ImGui::Separator();
+
+  // Build directory tree structure. We use a flat list grouped by parent dir.
+  // Track which directories are open via TreeNode.
+  ImGui::BeginChild("AssetTree", ImVec2(0, -140), true);
+
+  std::string lastDir;
+  bool dirOpen = false;
+
+  for (int i = 0; i < static_cast<int>(m_assetCache.size()); ++i) {
+    const auto &asset = m_assetCache[i];
+
+    // Apply filter.
+    if (m_assetFilterType == 1 && asset.type != AssetType::Mesh)
+      continue;
+    if (m_assetFilterType == 2 && asset.type != AssetType::Texture)
+      continue;
+    if (m_assetFilterType == 3 && asset.type != AssetType::Scene)
+      continue;
+
+    // Extract parent directory.
+    std::string dir;
+    auto slashPos = asset.path.rfind('/');
+    if (slashPos != std::string::npos)
+      dir = asset.path.substr(0, slashPos);
+
+    // If directory changed, close old tree node and open new one.
+    if (dir != lastDir) {
+      if (!lastDir.empty() && dirOpen) {
+        ImGui::TreePop();
+        dirOpen = false;
+      }
+      if (!dir.empty()) {
+        dirOpen = ImGui::TreeNode(dir.c_str());
+      } else {
+        dirOpen = true; // root-level files always shown
+      }
+      lastDir = dir;
+    }
+
+    if (!dirOpen)
+      continue;
+
+    // Type prefix.
+    const char *prefix = "[?]";
+    switch (asset.type) {
+    case AssetType::Mesh:    prefix = "[M]"; break;
+    case AssetType::Texture: prefix = "[T]"; break;
+    case AssetType::Scene:   prefix = "[S]"; break;
+    default: break;
+    }
+
+    char label[512];
+    snprintf(label, sizeof(label), "%s %s", prefix, asset.displayName.c_str());
+
+    bool selected = (m_selectedAssetIndex == i);
+    if (ImGui::Selectable(label, selected)) {
+      m_selectedAssetIndex = i;
+    }
+
+    // Double-click scene files to load.
+    if (ImGui::IsItemHovered() && ImGui::IsMouseDoubleClicked(0) &&
+        asset.type == AssetType::Scene) {
+      scene.LoadFromFile(asset.path, dx);
+    }
+
+    // Drag-drop source.
+    if (ImGui::BeginDragDropSource(ImGuiDragDropFlags_SourceAllowNullID)) {
+      const char *payloadType = "ASSET_PATH";
+      ImGui::SetDragDropPayload(payloadType, asset.path.c_str(),
+                                asset.path.size() + 1);
+      ImGui::Text("%s %s", prefix, asset.displayName.c_str());
+      ImGui::EndDragDropSource();
+    }
+  }
+
+  // Close last dir tree node if open.
+  if (!lastDir.empty() && dirOpen)
+    ImGui::TreePop();
+
+  ImGui::EndChild();
+
+  // ---- Detail / Preview area ----
+  ImGui::Separator();
+
+  if (m_selectedAssetIndex >= 0 &&
+      m_selectedAssetIndex < static_cast<int>(m_assetCache.size())) {
+    const auto &sel = m_assetCache[m_selectedAssetIndex];
+
+    ImGui::Text("File: %s", sel.displayName.c_str());
+    ImGui::TextWrapped("Path: %s", sel.path.c_str());
+
+    // File size.
+    namespace fs = std::filesystem;
+    if (fs::exists(sel.path)) {
+      auto sz = fs::file_size(sel.path);
+      if (sz < 1024)
+        ImGui::Text("Size: %llu B", static_cast<unsigned long long>(sz));
+      else if (sz < 1024 * 1024)
+        ImGui::Text("Size: %.1f KB", sz / 1024.0);
+      else
+        ImGui::Text("Size: %.1f MB", sz / (1024.0 * 1024.0));
+    }
+
+    // Texture preview.
+    if (sel.type == AssetType::Texture) {
+      // Only reload when selection changes.
+      // Request upload (deferred to next BeginFrame).
+      if (m_previewTexturePath != sel.path) {
+        LoadedImage img;
+        if (LoadImageFile(sel.path, img)) {
+          dx.RequestPreviewTexture(img);
+          m_previewTexturePath = sel.path;
+        }
+      }
+      // Show preview if available (uploaded in previous frame's BeginFrame).
+      if (m_previewTexturePath == sel.path && dx.HasPreviewTexture()) {
+        ImGui::Image(static_cast<ImTextureID>(dx.PreviewTextureGpu().ptr),
+                     ImVec2(64, 64));
+      }
+    }
+
+    // Assign buttons.
+    Entity *selEnt = scene.FindEntity(m_selectedEntity);
+    if (selEnt && selEnt->mesh.has_value()) {
+      if (sel.type == AssetType::Mesh && ImGui::Button("Load as Mesh")) {
+        auto &mc = selEnt->mesh.value();
+        Material oldMat = mc.material;
+        auto oldPaths = mc.texturePaths;
+        mc.sourceType = MeshSourceType::GltfFile;
+        mc.gltfPath = sel.path;
+        mc.meshId = UINT32_MAX;
+        m_history.Execute(std::make_unique<MaterialCommand>(
+            scene, dx, selEnt->id, oldMat, mc.material, oldPaths,
+            mc.texturePaths));
+      }
+
+      if (sel.type == AssetType::Texture) {
+        if (ImGui::BeginCombo("Assign to Slot", "Select...")) {
+          for (int s = 0; s < 6; ++s) {
+            if (ImGui::Selectable(kTexSlotNames[s])) {
+              auto &mc = selEnt->mesh.value();
+              Material oldMat = mc.material;
+              auto oldPaths = mc.texturePaths;
+              mc.texturePaths[s] = sel.path;
+              m_history.Execute(std::make_unique<MaterialCommand>(
+                  scene, dx, selEnt->id, oldMat, mc.material, oldPaths,
+                  mc.texturePaths));
+            }
+          }
+          ImGui::EndCombo();
+        }
+      }
+    }
+  } else {
+    ImGui::TextDisabled("Select an asset above.");
+  }
+
+  ImGui::End();
+}
+
 void SceneEditor::DrawGridEditorPanel(StageData &stage) {
   ImGui::SetNextWindowSize(ImVec2(340, 700), ImGuiCond_FirstUseEver);
   ImGui::SetNextWindowCollapsed(false, ImGuiCond_FirstUseEver);
   ImGui::Begin("Grid Editor");
+
+  // ---- Play Test button (Phase 5C) ----
+  if (ImGui::Button("Play Test (F5)")) {
+    m_playTestRequested = true;
+  }
+  ImGui::Separator();
 
   // ---- A. File I/O toolbar ----
   if (ImGui::CollapsingHeader("File", ImGuiTreeNodeFlags_DefaultOpen)) {
@@ -1585,6 +1996,8 @@ void SceneEditor::InitEditorMeshes(DxContext &dx) {
   m_editorMeshIds.tower = dx.CreateMeshResources(cone, {}, MakeTowerMaterial());
   m_editorMeshIds.highlight =
       dx.CreateMeshResources(cube, {}, MakeHighlightMaterial());
+  m_editorMeshIds.telegraph =
+      dx.CreateMeshResources(plane, {}, MakeTelegraphMaterial());
 
   m_editorMeshesInitialized = true;
 }
@@ -1593,8 +2006,19 @@ void SceneEditor::BuildStageViewportItems(const StageData &stage,
                                           FrameData &frame) const {
   if (!m_gridEditorOpen || !m_editorMeshesInitialized)
     return;
+
+  // Compute attack preview for selected tower (Phase 5C).
+  std::vector<std::pair<int, int>> attackTiles;
+  const std::vector<std::pair<int, int>> *attackPtr = nullptr;
+  if (m_selectedTower >= 0 &&
+      m_selectedTower < static_cast<int>(stage.towers.size())) {
+    attackTiles = ComputeAttackTiles(stage.towers[m_selectedTower],
+                                     stage.width, stage.height);
+    attackPtr = &attackTiles;
+  }
+
   BuildStageRenderItems(stage, m_editorMeshIds, frame.opaqueItems,
-                        m_selectedTileX, m_selectedTileY);
+                        m_selectedTileX, m_selectedTileY, attackPtr);
 }
 
 // ---- Ray-plane intersection for tile picking ----
@@ -1713,4 +2137,59 @@ void SceneEditor::FinalizeViewportPaintStroke(StageData &stage) {
 
   m_viewportPaintStroke.clear();
   m_viewportPainting = false;
+}
+
+// ---- Tower viewport picking (Phase 5C) ----
+
+int SceneEditor::ViewportPickTower(const StageData &stage, int screenX,
+                                   int screenY, int screenW, int screenH,
+                                   const DirectX::XMMATRIX &view,
+                                   const DirectX::XMMATRIX &proj) const {
+  using namespace DirectX;
+
+  // Screen -> NDC -> world ray.
+  float ndcX = 2.0f * screenX / screenW - 1.0f;
+  float ndcY = -(2.0f * screenY / screenH - 1.0f);
+
+  XMMATRIX invViewProj = XMMatrixInverse(nullptr, view * proj);
+  XMVECTOR nearPt =
+      XMVector3TransformCoord(XMVectorSet(ndcX, ndcY, 0.0f, 1.0f), invViewProj);
+  XMVECTOR farPt =
+      XMVector3TransformCoord(XMVectorSet(ndcX, ndcY, 1.0f, 1.0f), invViewProj);
+  XMVECTOR rayDir = XMVector3Normalize(XMVectorSubtract(farPt, nearPt));
+  XMVECTOR rayOrigin = nearPt;
+
+  // Intersect with y=0.8 plane (tower cone center height).
+  float originY = XMVectorGetY(rayOrigin);
+  float dirY = XMVectorGetY(rayDir);
+  if (std::fabsf(dirY) < 1e-6f)
+    return -1;
+  float t = (0.8f - originY) / dirY;
+  if (t < 0.0f)
+    return -1;
+
+  XMVECTOR hitPt = XMVectorAdd(rayOrigin, XMVectorScale(rayDir, t));
+  float hitX = XMVectorGetX(hitPt);
+  float hitZ = XMVectorGetZ(hitPt);
+
+  // Find closest tower within 0.5 units.
+  int bestIdx = -1;
+  float bestDist = 0.5f * 0.5f; // squared threshold
+
+  for (int i = 0; i < static_cast<int>(stage.towers.size()); ++i) {
+    const auto &tw = stage.towers[i];
+    // Tower world position matches BuildStageRenderItems: (tw.x, 0.8, tw.y).
+    float twX = static_cast<float>(tw.x);
+    float twZ = static_cast<float>(tw.y);
+
+    float dx = hitX - twX;
+    float dz = hitZ - twZ;
+    float dist2 = dx * dx + dz * dz;
+    if (dist2 < bestDist) {
+      bestDist = dist2;
+      bestIdx = i;
+    }
+  }
+
+  return bestIdx;
 }

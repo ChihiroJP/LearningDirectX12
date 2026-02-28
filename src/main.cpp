@@ -15,6 +15,7 @@
 #include "SSAORenderer.h"
 #include "IBLGenerator.h"
 #include "MeshRenderer.h"
+#include "ParticleRenderer.h"
 #include "SkyRenderer.h"
 #include "Win32Window.h"
 #include "particle_test.h"
@@ -23,6 +24,7 @@
 #include "engine/Scene.h"
 #include "engine/SceneEditor.h"
 
+#include <algorithm>
 #include <array>
 #include <chrono>
 #include <cmath>
@@ -107,7 +109,8 @@ static void OnResize(uint32_t w, uint32_t h, void *userData) {
     ctx->dx->Resize(w, h);
   if (ctx && ctx->cam && h != 0) {
     const float aspect = static_cast<float>(w) / static_cast<float>(h);
-    ctx->cam->SetLens(DirectX::XM_PIDIV4, aspect, 0.1f, 1000.0f);
+    // Preserve current FOV/near/far when resizing (Phase 6).
+    ctx->cam->SetLens(ctx->cam->FovY(), aspect, ctx->cam->NearZ(), ctx->cam->FarZ());
   }
 }
 
@@ -374,6 +377,18 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int nCmdShow) {
     sceneEditor.InitEditorMeshes(dx); // Phase 5B: create viewport tile meshes.
     bool prevF5 = false;
     bool prevLButton = false; // for edge-detection of left-click (mouse pick)
+    bool playTesting = false; // Phase 5C: true when play-testing from grid editor
+
+    // Scene play mode (Phase 8).
+    bool scenePlayMode = false;
+    std::string sceneSnapshot;
+
+    // Shader hot-reload (Phase 8).
+    bool prevF9 = false;
+    std::string g_shaderReloadErrors;
+    float g_shaderReloadTimer = 0.0f;
+    static constexpr float kShaderMsgOkDuration = 3.0f;
+    static constexpr float kShaderMsgErrDuration = 10.0f;
 
     SetStartupStage(70);
     while (window.PumpMessages() && !(appMode == AppMode::Game && gridGame.WantsQuit())) {
@@ -388,12 +403,49 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int nCmdShow) {
 
       auto &input = window.GetInput();
 
-      // ---- F5: toggle Editor / Game mode (Milestone 4) ----
+      // ---- F5: toggle Editor / Game / Scene-Play mode (Milestone 4 + Phase 8) ----
       {
         const bool f5Now = input.IsKeyDown(VK_F5);
-        if (f5Now && !prevF5)
-          appMode = (appMode == AppMode::Editor) ? AppMode::Game : AppMode::Editor;
+        if (f5Now && !prevF5) {
+          if (playTesting) {
+            // Branch 1: stop grid play-test.
+            appMode = AppMode::Editor;
+            playTesting = false;
+          } else if (scenePlayMode) {
+            // Branch 2: stop scene play, restore snapshot.
+            dx.WaitForGpu();
+            editorScene.DeserializeFromString(sceneSnapshot, dx);
+            sceneSnapshot.clear();
+            scenePlayMode = false;
+          } else if (appMode == AppMode::Editor && sceneEditor.IsGridEditorOpen()) {
+            // Branch 3: start grid play-test.
+            gridGame.LoadFromStageData(editStage);
+            appMode = AppMode::Game;
+            playTesting = true;
+          } else if (appMode == AppMode::Editor) {
+            // Branch 4: start scene play mode.
+            sceneSnapshot = editorScene.SerializeToString();
+            scenePlayMode = true;
+          } else {
+            // Game mode (non-play-test): toggle back to editor.
+            appMode = AppMode::Editor;
+          }
+        }
         prevF5 = f5Now;
+      }
+
+      // Check play-test button request from grid editor panel (Phase 5C).
+      if (appMode == AppMode::Editor && sceneEditor.ConsumePlayTestRequest()) {
+        gridGame.LoadFromStageData(editStage);
+        appMode = AppMode::Game;
+        playTesting = true;
+      }
+
+      // Check scene play request from menu bar (Phase 8).
+      if (appMode == AppMode::Editor && !scenePlayMode &&
+          sceneEditor.ConsumeScenePlayRequest()) {
+        sceneSnapshot = editorScene.SerializeToString();
+        scenePlayMode = true;
       }
 
       // ---- F6: toggle Grid Editor panel (Phase 5) ----
@@ -403,6 +455,26 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int nCmdShow) {
         if (f6Now && !prevF6 && appMode == AppMode::Editor)
           sceneEditor.ToggleGridEditor();
         prevF6 = f6Now;
+      }
+
+      // ---- F9: shader hot-reload (Phase 8) ----
+      {
+        const bool f9Now = input.IsKeyDown(VK_F9);
+        if (f9Now && !prevF9) {
+          dx.WaitForGpu();
+          g_shaderReloadErrors.clear();
+          g_shaderReloadErrors += dx.GetMeshRenderer().ReloadShaders(dx);
+          g_shaderReloadErrors += postProcess.ReloadShaders(dx);
+          g_shaderReloadErrors += ssaoRenderer.ReloadShaders(dx);
+          g_shaderReloadErrors += skyRenderer.ReloadShaders(dx);
+          g_shaderReloadErrors += gridRenderer.ReloadShaders(dx);
+          g_shaderReloadErrors += deferredLightingPass.ReloadShaders(dx);
+          g_shaderReloadErrors += dx.GetParticleRenderer().ReloadShaders(dx);
+          g_shaderReloadTimer = g_shaderReloadErrors.empty()
+                                    ? kShaderMsgOkDuration
+                                    : kShaderMsgErrDuration;
+        }
+        prevF9 = f9Now;
       }
 
       // ---- Settings toggle — only when in game mode on main menu (Phase 12.6) ----
@@ -417,23 +489,50 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int nCmdShow) {
 
       const bool uiWantsMouse = imgui.WantCaptureMouse();
 
-      // Editor-style camera: RMB+WASD to fly, scroll to zoom (like Unity/UE5).
+      // Camera input routing — mode-dependent (Phase 6).
       const bool isPlaying = (appMode == AppMode::Game && gridGame.GetState() == GridGameState::Playing);
-      const bool wantMouseLook = !isPlaying && (!uiWantsMouse) && input.IsKeyDown(VK_RBUTTON);
 
       // Always consume scroll to prevent accumulation.
       float scroll = input.ConsumeScrollDelta();
 
       if (!isPlaying) {
         auto md = input.ConsumeMouseDelta();
-        if (wantMouseLook) {
-          cam.AddYawPitch(md.dx * 0.0025f, -md.dy * 0.0025f);
-        }
-        cam.Update(dt, input, wantMouseLook);
 
-        // Scroll wheel zoom (when UI doesn't want mouse).
-        if (!uiWantsMouse)
-          cam.ApplyScrollZoom(scroll);
+        switch (cam.Mode()) {
+        case CameraMode::FreeFly: {
+          const bool wantMouseLook = !uiWantsMouse && input.IsKeyDown(VK_RBUTTON);
+          if (wantMouseLook)
+            cam.AddYawPitch(md.dx * cam.LookSpeed(), -md.dy * cam.LookSpeed());
+          cam.Update(dt, input, wantMouseLook);
+          if (!uiWantsMouse)
+            cam.ApplyScrollZoom(scroll);
+          break;
+        }
+        case CameraMode::Orbit: {
+          const bool wantOrbit = !uiWantsMouse && input.IsKeyDown(VK_RBUTTON);
+          if (wantOrbit) {
+            cam.SetOrbitAngles(
+                cam.OrbitYaw() + md.dx * cam.LookSpeed(),
+                cam.OrbitPitch() - md.dy * cam.LookSpeed());
+          }
+          cam.UpdateOrbit(dt, input, wantOrbit);
+          if (!uiWantsMouse)
+            cam.ApplyOrbitScrollZoom(scroll);
+          break;
+        }
+        case CameraMode::GameTopDown: {
+          cam.UpdateGameTopDown(dt, input);
+          // Scroll adjusts height.
+          if (!uiWantsMouse && scroll != 0.0f) {
+            DirectX::XMFLOAT3 pos = cam.GetPosition();
+            pos.y -= scroll * cam.MoveSpeed() * 0.5f;
+            pos.y = std::max(1.0f, pos.y);
+            cam.SetPosition(pos.x, pos.y, pos.z);
+          }
+          break;
+        }
+        default: break;
+        }
       }
 
       // ---- Mouse picking (editor, left-click) ----
@@ -443,6 +542,7 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int nCmdShow) {
 
         if (sceneEditor.IsGridEditorOpen()) {
           // Phase 5B: viewport tile picking + painting.
+          // Phase 5C: also try tower picking on click.
           POINT cursorPos;
           GetCursorPos(&cursorPos);
           ScreenToClient(window.Handle(), &cursorPos);
@@ -450,6 +550,16 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int nCmdShow) {
               cursorPos.x < static_cast<LONG>(window.Width()) &&
               cursorPos.y >= 0 &&
               cursorPos.y < static_cast<LONG>(window.Height())) {
+            if (lbNow && !prevLButton) {
+              // Try tower pick first (Phase 5C).
+              int towerIdx = sceneEditor.ViewportPickTower(
+                  editStage, cursorPos.x, cursorPos.y,
+                  static_cast<int>(window.Width()),
+                  static_cast<int>(window.Height()), cam.View(), cam.Proj());
+              if (towerIdx >= 0) {
+                sceneEditor.SelectTower(towerIdx);
+              }
+            }
             if (lbNow) {
               sceneEditor.HandleViewportTilePaint(
                   editStage, cursorPos.x, cursorPos.y,
@@ -676,9 +786,18 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int nCmdShow) {
       // ---- Game / Editor layer update (Milestone 4) ----
       if (appMode == AppMode::Game) {
         gridGame.Update(dt, input, window, frame);
+
+        // Phase 5C: return to editor when play-test game reaches MainMenu.
+        if (playTesting && gridGame.GetState() == GridGameState::MainMenu) {
+          appMode = AppMode::Editor;
+          playTesting = false;
+        }
+      } else if (scenePlayMode) {
+        // Scene play mode (Phase 8): build frame data but skip editor UI.
+        editorScene.BuildFrameData(frame);
       } else {
         sceneEditor.DrawUI(editorScene, dx, cam.View(), cam.Proj(), &iblEnabled,
-                           &editStage);
+                           &editStage, &cam);
         editorScene.BuildFrameData(frame);
         sceneEditor.BuildHighlightItems(editorScene, frame);
 
@@ -695,14 +814,41 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int nCmdShow) {
             ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize |
             ImGuiWindowFlags_NoMove | ImGuiWindowFlags_AlwaysAutoResize |
             ImGuiWindowFlags_NoBackground);
-        if (appMode == AppMode::Editor && sceneEditor.IsGridEditorOpen()) {
-          ImGui::TextColored(ImVec4(0.2f,0.8f,1,1), "[EDITOR] F5=Game  F6=Grid Editor (ON)");
+        if (playTesting) {
+          ImGui::TextColored(ImVec4(1.0f, 0.3f, 0.3f, 1.0f),
+                             "[PLAY-TEST] ESC=Pause  F5=Stop");
+        } else if (scenePlayMode) {
+          ImGui::TextColored(ImVec4(1.0f, 0.8f, 0.2f, 1.0f),
+                             "[SCENE PLAY] F5=Stop");
+        } else if (appMode == AppMode::Editor && sceneEditor.IsGridEditorOpen()) {
+          ImGui::TextColored(ImVec4(0.2f,0.8f,1,1), "[EDITOR] F5=Play Test  F6=Grid Editor (ON)");
         } else {
           ImGui::TextColored(
               appMode == AppMode::Editor ? ImVec4(0,1,0.5f,1) : ImVec4(1,0.5f,0,1),
               appMode == AppMode::Editor ? "[EDITOR] F5=Game  F6=Grid Editor" : "[GAME] F5=Editor");
         }
         ImGui::End();
+      }
+
+      // ---- Shader reload overlay (Phase 8) ----
+      if (g_shaderReloadTimer > 0.0f) {
+        g_shaderReloadTimer -= dt;
+        float alpha = std::min(1.0f, g_shaderReloadTimer);
+        ImGui::SetNextWindowPos(ImVec2(static_cast<float>(window.Width()) / 2.0f, 40.0f),
+                                ImGuiCond_Always, ImVec2(0.5f, 0.0f));
+        ImGui::PushStyleVar(ImGuiStyleVar_Alpha, alpha);
+        ImGui::Begin("##ShaderReload", nullptr,
+            ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize |
+            ImGuiWindowFlags_NoMove | ImGuiWindowFlags_AlwaysAutoResize |
+            ImGuiWindowFlags_NoFocusOnAppearing | ImGuiWindowFlags_NoNav);
+        if (g_shaderReloadErrors.empty()) {
+          ImGui::TextColored(ImVec4(0.2f, 1.0f, 0.3f, 1.0f), "Shaders reloaded OK");
+        } else {
+          ImGui::TextColored(ImVec4(1.0f, 0.3f, 0.3f, 1.0f), "Shader reload errors:");
+          ImGui::TextUnformatted(g_shaderReloadErrors.c_str());
+        }
+        ImGui::End();
+        ImGui::PopStyleVar();
       }
 
       // Toggle IBL descriptors on/off (mesh renderer + deferred lighting).

@@ -7,6 +7,7 @@
 #include "ParticleRenderer.h"
 #include "DxContext.h"
 #include "DxUtil.h"
+#include "ShaderCompiler.h"
 
 #include <cstring>
 #include <d3dcompiler.h>
@@ -56,6 +57,57 @@ void ParticleRenderer::Reset() {
   m_pso.Reset();
   m_rootSig.Reset();
   m_initialized = false;
+}
+
+std::string ParticleRenderer::ReloadShaders(DxContext &dx) {
+  std::string errors;
+  auto vs = CompileShaderSafe(L"shaders/particle.hlsl", "VSMain", "vs_5_0");
+  auto ps = CompileShaderSafe(L"shaders/particle.hlsl", "PSMain", "ps_5_0");
+  if (vs.success && ps.success) {
+    D3D12_INPUT_ELEMENT_DESC inputElems[] = {
+        {"POSITION", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 0, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0},
+        {"TEXCOORD", 0, DXGI_FORMAT_R32G32_FLOAT, 0, 12, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0},
+        {"COLOR", 0, DXGI_FORMAT_R32G32B32A32_FLOAT, 0, 20, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0},
+    };
+    D3D12_GRAPHICS_PIPELINE_STATE_DESC pso{};
+    pso.pRootSignature = m_rootSig.Get();
+    pso.VS = {vs.bytecode->GetBufferPointer(), vs.bytecode->GetBufferSize()};
+    pso.PS = {ps.bytecode->GetBufferPointer(), ps.bytecode->GetBufferSize()};
+    D3D12_BLEND_DESC blend{};
+    blend.RenderTarget[0].BlendEnable = TRUE;
+    blend.RenderTarget[0].SrcBlend = D3D12_BLEND_SRC_ALPHA;
+    blend.RenderTarget[0].DestBlend = D3D12_BLEND_ONE;
+    blend.RenderTarget[0].BlendOp = D3D12_BLEND_OP_ADD;
+    blend.RenderTarget[0].SrcBlendAlpha = D3D12_BLEND_ONE;
+    blend.RenderTarget[0].DestBlendAlpha = D3D12_BLEND_ONE;
+    blend.RenderTarget[0].BlendOpAlpha = D3D12_BLEND_OP_ADD;
+    blend.RenderTarget[0].RenderTargetWriteMask = D3D12_COLOR_WRITE_ENABLE_ALL;
+    pso.BlendState = blend;
+    pso.SampleMask = UINT_MAX;
+    D3D12_RASTERIZER_DESC rast{};
+    rast.FillMode = D3D12_FILL_MODE_SOLID;
+    rast.CullMode = D3D12_CULL_MODE_NONE;
+    rast.DepthClipEnable = TRUE;
+    pso.RasterizerState = rast;
+    D3D12_DEPTH_STENCIL_DESC ds{};
+    ds.DepthEnable = TRUE;
+    ds.DepthWriteMask = D3D12_DEPTH_WRITE_MASK_ZERO;
+    ds.DepthFunc = D3D12_COMPARISON_FUNC_LESS;
+    pso.DepthStencilState = ds;
+    pso.DSVFormat = dx.DepthFormat();
+    pso.InputLayout = {inputElems, _countof(inputElems)};
+    pso.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE;
+    pso.NumRenderTargets = 1;
+    pso.RTVFormats[0] = dx.HdrFormat();
+    pso.SampleDesc.Count = 1;
+    Microsoft::WRL::ComPtr<ID3D12PipelineState> newPso;
+    if (SUCCEEDED(dx.m_device->CreateGraphicsPipelineState(&pso, IID_PPV_ARGS(&newPso))))
+      m_pso = newPso;
+  } else {
+    if (!vs.success) errors += "[particle.hlsl VS] " + vs.errorMessage + "\n";
+    if (!ps.success) errors += "[particle.hlsl PS] " + ps.errorMessage + "\n";
+  }
+  return errors;
 }
 
 void ParticleRenderer::Initialize(DxContext &dx) {

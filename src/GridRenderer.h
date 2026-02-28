@@ -7,6 +7,7 @@
 #pragma once
 
 #include <cstdint>
+#include <string>
 
 #include <d3d12.h>
 #include <dxgi1_6.h>
@@ -21,6 +22,7 @@ public:
   void Initialize(DxContext &dx);
   void Draw(DxContext &dx, const DirectX::XMMATRIX &view,
             const DirectX::XMMATRIX &proj);
+  std::string ReloadShaders(DxContext &dx);
   void Reset();
 
 private:

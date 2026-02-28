@@ -12,6 +12,7 @@
 
 #include <DirectXMath.h>
 #include <cstdint>
+#include <string>
 #include <vector>
 
 #include <d3d12.h>
@@ -82,6 +83,9 @@ public:
                          const DirectX::XMMATRIX &view,
                          const DirectX::XMMATRIX &proj,
                          const DirectX::XMFLOAT4 &color);
+
+  // Hot-reload all shaders, recreate PSOs. Returns empty on success, error string on failure.
+  std::string ReloadShaders(DxContext &dx);
 
   void Reset(); // release all meshes + pipeline
 

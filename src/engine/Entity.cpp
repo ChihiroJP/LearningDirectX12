@@ -392,3 +392,48 @@ Entity JsonToEntity(const json &j) {
 
   return e;
 }
+
+// ---- Camera Preset serialization (Phase 6) ----
+
+json CameraPresetToJson(const CameraPreset &p) {
+  json j;
+  j["name"] = p.name;
+  j["position"] = {p.position.x, p.position.y, p.position.z};
+  j["yaw"] = p.yaw;
+  j["pitch"] = p.pitch;
+  j["fovY"] = p.fovY;
+  j["nearZ"] = p.nearZ;
+  j["farZ"] = p.farZ;
+  j["mode"] = static_cast<int>(p.mode);
+  j["orbitTarget"] = {p.orbitTarget.x, p.orbitTarget.y, p.orbitTarget.z};
+  j["orbitDistance"] = p.orbitDistance;
+  j["orbitYaw"] = p.orbitYaw;
+  j["orbitPitch"] = p.orbitPitch;
+  return j;
+}
+
+CameraPreset JsonToCameraPreset(const json &j) {
+  CameraPreset p;
+  if (j.contains("name"))
+    p.name = j["name"].get<std::string>();
+  if (j.contains("position") && j["position"].is_array() && j["position"].size() >= 3) {
+    p.position.x = j["position"][0].get<float>();
+    p.position.y = j["position"][1].get<float>();
+    p.position.z = j["position"][2].get<float>();
+  }
+  if (j.contains("yaw"))    p.yaw   = j["yaw"].get<float>();
+  if (j.contains("pitch"))  p.pitch = j["pitch"].get<float>();
+  if (j.contains("fovY"))   p.fovY  = j["fovY"].get<float>();
+  if (j.contains("nearZ"))  p.nearZ = j["nearZ"].get<float>();
+  if (j.contains("farZ"))   p.farZ  = j["farZ"].get<float>();
+  if (j.contains("mode"))   p.mode  = static_cast<CameraMode>(j["mode"].get<int>());
+  if (j.contains("orbitTarget") && j["orbitTarget"].is_array() && j["orbitTarget"].size() >= 3) {
+    p.orbitTarget.x = j["orbitTarget"][0].get<float>();
+    p.orbitTarget.y = j["orbitTarget"][1].get<float>();
+    p.orbitTarget.z = j["orbitTarget"][2].get<float>();
+  }
+  if (j.contains("orbitDistance")) p.orbitDistance = j["orbitDistance"].get<float>();
+  if (j.contains("orbitYaw"))     p.orbitYaw     = j["orbitYaw"].get<float>();
+  if (j.contains("orbitPitch"))   p.orbitPitch   = j["orbitPitch"].get<float>();
+  return p;
+}

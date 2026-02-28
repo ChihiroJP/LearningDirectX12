@@ -8,6 +8,7 @@
 #include "DxContext.h"
 #include "DxUtil.h"
 #include "HdriLoader.h"
+#include "ShaderCompiler.h"
 
 #include <cstring>
 #include <d3dcompiler.h>
@@ -327,6 +328,43 @@ void SkyRenderer::Draw(DxContext &dx, const DirectX::XMMATRIX &view,
 
   dx.m_cmdList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
   dx.m_cmdList->DrawInstanced(3, 1, 0, 0);
+}
+
+std::string SkyRenderer::ReloadShaders(DxContext &dx) {
+  std::string errors;
+  auto vs = CompileShaderSafe(L"shaders/sky.hlsl", "VSMain", "vs_5_0");
+  auto ps = CompileShaderSafe(L"shaders/sky.hlsl", "PSMain", "ps_5_0");
+  if (vs.success && ps.success) {
+    D3D12_GRAPHICS_PIPELINE_STATE_DESC pso{};
+    pso.pRootSignature = m_rootSig.Get();
+    pso.VS = {vs.bytecode->GetBufferPointer(), vs.bytecode->GetBufferSize()};
+    pso.PS = {ps.bytecode->GetBufferPointer(), ps.bytecode->GetBufferSize()};
+    D3D12_BLEND_DESC blend{};
+    blend.RenderTarget[0].RenderTargetWriteMask = D3D12_COLOR_WRITE_ENABLE_ALL;
+    pso.BlendState = blend;
+    pso.SampleMask = UINT_MAX;
+    D3D12_RASTERIZER_DESC rast{};
+    rast.FillMode = D3D12_FILL_MODE_SOLID;
+    rast.CullMode = D3D12_CULL_MODE_NONE;
+    rast.DepthClipEnable = TRUE;
+    pso.RasterizerState = rast;
+    D3D12_DEPTH_STENCIL_DESC ds{};
+    ds.DepthEnable = FALSE;
+    ds.StencilEnable = FALSE;
+    pso.DepthStencilState = ds;
+    pso.InputLayout = {nullptr, 0};
+    pso.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE;
+    pso.NumRenderTargets = 1;
+    pso.RTVFormats[0] = dx.m_hdrFormat;
+    pso.SampleDesc.Count = 1;
+    Microsoft::WRL::ComPtr<ID3D12PipelineState> newPso;
+    if (SUCCEEDED(dx.m_device->CreateGraphicsPipelineState(&pso, IID_PPV_ARGS(&newPso))))
+      m_pso = newPso;
+  } else {
+    if (!vs.success) errors += "[sky.hlsl VS] " + vs.errorMessage + "\n";
+    if (!ps.success) errors += "[sky.hlsl PS] " + ps.errorMessage + "\n";
+  }
+  return errors;
 }
 
 void SkyRenderer::Reset() {

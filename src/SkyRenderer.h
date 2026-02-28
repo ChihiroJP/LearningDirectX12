@@ -8,6 +8,7 @@
 
 #include <array>
 #include <cstdint>
+#include <string>
 
 #include <d3d12.h>
 #include <dxgi1_6.h>
@@ -23,6 +24,8 @@ public:
   void Draw(DxContext &dx, const DirectX::XMMATRIX &view,
             const DirectX::XMMATRIX &proj, float exposure);
   void Reset();
+
+  std::string ReloadShaders(DxContext &dx);
 
   // Public accessors for IBL precomputation.
   ID3D12Resource *HdriTexture() const { return m_tex.Get(); }

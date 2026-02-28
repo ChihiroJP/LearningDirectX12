@@ -9,6 +9,7 @@
 
 #include "RenderPass.h"
 #include <d3d12.h>
+#include <string>
 #include <wrl.h>
 
 class ShadowMap;
@@ -71,6 +72,7 @@ public:
   DeferredLightingPass(ShadowMap &shadow, MeshRenderer &mesh)
       : m_shadow(shadow), m_mesh(mesh) {}
   void Execute(DxContext &dx, const FrameData &frame) override;
+  std::string ReloadShaders(DxContext &dx);
 
 private:
   ShadowMap &m_shadow;

@@ -187,6 +187,14 @@ public:
   void ImGuiAllocSrv(D3D12_CPU_DESCRIPTOR_HANDLE *outCpu,
                      D3D12_GPU_DESCRIPTOR_HANDLE *outGpu);
 
+  // Queue a preview texture for upload (processed during next BeginFrame).
+  // Returns the GPU handle that will be valid after the next BeginFrame.
+  void RequestPreviewTexture(const LoadedImage &img);
+
+  // Returns the current preview SRV GPU handle (0 if none loaded yet).
+  D3D12_GPU_DESCRIPTOR_HANDLE PreviewTextureGpu() const { return m_previewSrvGpu; }
+  bool HasPreviewTexture() const { return m_previewSrvAllocated && m_previewTex; }
+
 private:
   friend class MeshRenderer;
   friend class ShadowMap;
@@ -254,6 +262,14 @@ private:
   uint32_t m_imguiSrvDescriptorSize = 0;
   uint32_t m_imguiSrvCapacity = 0;
   uint32_t m_imguiSrvNext = 0;
+
+  // Preview texture (Asset Browser thumbnail — reuses single descriptor slot).
+  Microsoft::WRL::ComPtr<ID3D12Resource> m_previewTex;
+  Microsoft::WRL::ComPtr<ID3D12Resource> m_previewUpload; // must stay alive until GPU finishes copy
+  D3D12_CPU_DESCRIPTOR_HANDLE m_previewSrvCpu{};
+  D3D12_GPU_DESCRIPTOR_HANDLE m_previewSrvGpu{};
+  bool m_previewSrvAllocated = false;
+  LoadedImage m_pendingPreview; // set by RequestPreviewTexture, consumed by BeginFrame
 
   // Main SRV heap (shader-visible) for app resources
   Microsoft::WRL::ComPtr<ID3D12DescriptorHeap> m_mainSrvHeap;

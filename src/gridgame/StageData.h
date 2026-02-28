@@ -13,6 +13,7 @@
 
 #include <cstdint>
 #include <string>
+#include <utility>
 #include <vector>
 
 // ---- Tile editing data (no runtime state) ----
@@ -84,9 +85,15 @@ struct EditorMeshIds {
   uint32_t cargoSpawn = UINT32_MAX;
   uint32_t tower = UINT32_MAX;
   uint32_t highlight = UINT32_MAX;
+  uint32_t telegraph = UINT32_MAX; // attack preview overlay plane
 };
+
+// Compute which grid tiles a tower's attack pattern covers.
+std::vector<std::pair<int, int>> ComputeAttackTiles(const TowerData &tower,
+                                                     int gridW, int gridH);
 
 // Build RenderItems from StageData for editor viewport visualization.
 void BuildStageRenderItems(const StageData &stage, const EditorMeshIds &ids,
                            std::vector<RenderItem> &outItems,
-                           int highlightX = -1, int highlightY = -1);
+                           int highlightX = -1, int highlightY = -1,
+                           const std::vector<std::pair<int, int>> *attackPreview = nullptr);
