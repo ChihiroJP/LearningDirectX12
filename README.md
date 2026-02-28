@@ -7,6 +7,7 @@ A **DirectX 12 game project** featuring a custom rendering engine with modern gr
 A **tactical cargo-push puzzle game** on a danger grid with a **cyber/neon aesthetic**.
 
 - **Objective**: Push a cargo cube from the left edge to the right edge of a grid
+- **Movement**: WASD to push cargo (player walks into cargo to push it), E + WASD to pull cargo (player pulls cargo toward themselves, solves wall-stuck situations)
 - **Danger**: Towers around the grid perimeter fire patterned attacks (row sweeps, column strikes, area blasts, tracking shots) with telegraphed warnings on affected tiles
 - **Puzzle**: Some paths are blocked by walls that can only be destroyed by baiting tower attacks onto them
 - **Hazards**: Fire (DOT), lightning (periodic burst), spike traps (damage + stun), ice (slow), crumbling tiles (break after stepping)
@@ -32,7 +33,7 @@ A **tactical cargo-push puzzle game** on a danger grid with a **cyber/neon aesth
 
 ### Build & run
 ```powershell
-cmake -S . -B build -G "Visual Studio 17 2022" -A x64
+cmake -S . -B build -G "Visual Studio 18 2026" -A x64
 cmake --build build --config Debug
 .\build\bin\Debug\DX12Tutorial12.exe
 ```
@@ -79,7 +80,7 @@ notes/                  Learning notes / architecture docs
 
 ### Milestone 3: Grid Gauntlet
 - ✅ **Phase 1 — Infrastructure**: Procedural mesh generation, grid rendering, new game module skeleton
-- **Phase 2 — Core gameplay**: Tile-to-tile player movement, cargo grab/push, grid camera
+- **Phase 2 — Core gameplay**: Tile-to-tile player movement, cargo push (WASD) + pull (E+WASD), grid camera
 - **Phase 3 — Towers & telegraph**: Perimeter towers, attack patterns, telegraph warnings, wall-bait mechanic
 - **Phase 4 — Hazards**: Fire, lightning, spike traps, ice, crumbling tiles
 - **Phase 5 — Stage system**: 25 stage definitions, stage select screen, timer + S/A/B/C rating
@@ -92,13 +93,13 @@ notes/                  Learning notes / architecture docs
 - ✅ **Phase 2 — Material & Texture Editor**: Per-object PBR material editing (base color, metallic, roughness, emissive, UV tiling/offset, POM), material presets, texture slot assignment with file loading + thumbnails, undo/redo, live preview
 - ✅ **Phase 3 — Lighting Panel**: Scene-global directional light controls (direction, intensity, color), IBL intensity, per-entity point/spot light editing with undo/redo, serialized with scene, drag coalescing
 - ✅ **Phase 4 — Shadow & Post-Process Controls**: CSM tuning (bias, strength, lambda split, max distance, debug cascades), SSAO (radius, bias, power, kernel size, strength), post-processing (exposure, bloom, TAA, FXAA, motion blur, DOF) — all with undo/redo, drag coalescing, serialized per-scene
-- 🔨 **Phase 5 — Grid & Level Editor**: Visual grid editor (paint tiles, walls, hazards), tower placement, stage save/load, play-test from editor
+- ✅ **Phase 5 — Grid & Level Editor**: Visual grid editor (paint tiles, walls, hazards), tower placement, stage save/load, play-test from editor
   - ✅ **5A — Data Model + Panel**: StageData structs, JSON stage file format, undo/redo commands, ImGui panel with mini-grid view + brush painting (F6 toggle)
   - ✅ **5B — Viewport Rendering + Picking**: 3D grid visualization, mouse tile picking, viewport paint mode
-  - **5C — Towers + Play-Test**: Tower placement UI, attack pattern preview, play-test toggle
-- **Phase 6 — Camera System**: Switchable camera modes (free-fly, orbit, game camera), viewport controls, camera presets, FOV/near/far adjustment
-- **Phase 7 — Asset Browser & Inspector**: File browser for meshes/textures/scenes, property inspector panel, drag-and-drop asset assignment
-- **Phase 8 — Play Mode & Hot Reload**: Editor ↔ play mode toggle, shader hot reload, scene state save/restore on play/stop
+  - ✅ **5C — Towers + Play-Test**: Tower placement UI, attack pattern preview, play-test toggle
+- ✅ **Phase 6 — Camera System**: Switchable camera modes (free-fly, orbit, game camera), viewport controls, camera presets, FOV/near/far adjustment
+- ✅ **Phase 7 — Asset Browser & Inspector**: File browser for meshes/textures/scenes, texture preview thumbnails, drag-and-drop asset assignment to inspector slots
+- ✅ **Phase 8 — Play Mode & Hot Reload**: Editor ↔ play mode toggle (F5 scene snapshot/restore), shader hot reload (F9 recompile all PSOs), scene state save/restore on play/stop
 
 ### Final
 - **Portfolio demo polish**: capture-ready presentation
