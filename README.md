@@ -80,12 +80,12 @@ notes/                  Learning notes / architecture docs
 
 ### Milestone 3: Grid Gauntlet
 - ✅ **Phase 1 — Infrastructure**: Procedural mesh generation, grid rendering, new game module skeleton
-- **Phase 2 — Core gameplay**: Tile-to-tile player movement, cargo push (WASD) + pull (E+WASD), grid camera
+- ✅ **Phase 2 — Core gameplay**: Tile-to-tile player movement, cargo push (WASD) + pull (E+WASD), grid camera, hold-to-repeat
 - **Phase 3 — Towers & telegraph**: Perimeter towers, attack patterns, telegraph warnings, wall-bait mechanic
-- **Phase 4 — Hazards**: Fire, lightning, spike traps, ice, crumbling tiles
+- ✅ **Phase 4 — Hazards**: Fire (DOT), lightning (periodic burst), spike traps (damage + stun), ice (slide), crumbling tiles (break after step-off), HP system (3 hearts, i-frames, damage flash)
 - **Phase 5 — Stage system**: 25 stage definitions, stage select screen, timer + S/A/B/C rating
-- **Phase 6 — VFX & visual polish**: Neon glow aesthetic, particle effects, bloom tuning
-- **Phase 7 — UI polish**: Main menu, stage select, HUD, pause menu, completion/fail screens
+- ✅ **Phase 6 — VFX & visual polish**: Neon glow aesthetic (bloom tuning, boosted emissives, animated glow pulsing, neon grid lines, colored tile borders, player trail, goal beacon, fire ember + ice crystal particles)
+- ✅ **Phase 7 — UI polish**: Neon-themed Main Menu (pulsing title, styled buttons), HUD (time/moves/hearts/pull badge/stun indicator), Pause (dim overlay, controls reminder), Stage Complete (rating S/A/B/C, stats), Stage Fail (retry prompt), cargo rock texture
 
 ### Milestone 4: Game Engine (Editor & Runtime Tools)
 - ✅ **Phase 0 — Scene & Object Model**: Entity/component registry, scene graph, serialization (JSON), runtime create/destroy objects, editor selection highlight, viewport mouse picking

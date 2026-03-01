@@ -305,6 +305,7 @@ void DeferredLightingPass::CreatePipelineOnce(DxContext &dx) {
 
 std::string DeferredLightingPass::ReloadShaders(DxContext &dx) {
   std::string errors;
+  if (!m_rootSig) return errors;
   auto vs = CompileShaderSafe(L"shaders/deferred_lighting.hlsl", "VSFullscreen", "vs_5_1");
   auto ps = CompileShaderSafe(L"shaders/deferred_lighting.hlsl", "PSMain", "ps_5_1");
   if (vs.success && ps.success) {

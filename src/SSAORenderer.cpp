@@ -475,7 +475,7 @@ std::string SSAORenderer::ReloadShaders(DxContext &dx) {
   std::string errors;
 
   // SSAO generation PSO
-  {
+  if (m_ssaoRootSig) {
     auto vs = CompileShaderSafe(L"shaders/ssao.hlsl", "VSFullscreen", "vs_5_0");
     auto ps = CompileShaderSafe(L"shaders/ssao.hlsl", "PSGenerateSSAO", "ps_5_0");
     if (vs.success && ps.success) {
@@ -510,7 +510,7 @@ std::string SSAORenderer::ReloadShaders(DxContext &dx) {
   }
 
   // Bilateral blur PSO
-  {
+  if (m_blurRootSig) {
     auto vs = CompileShaderSafe(L"shaders/ssao.hlsl", "VSFullscreen", "vs_5_0");
     auto ps = CompileShaderSafe(L"shaders/ssao.hlsl", "PSBilateralBlur", "ps_5_0");
     if (vs.success && ps.success) {

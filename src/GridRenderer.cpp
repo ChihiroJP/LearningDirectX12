@@ -238,6 +238,7 @@ void GridRenderer::Draw(DxContext &dx, const DirectX::XMMATRIX &view,
 
 std::string GridRenderer::ReloadShaders(DxContext &dx) {
   std::string errors;
+  if (!m_rootSig) return errors;
   auto vs = CompileShaderSafe(L"shaders/basic3d.hlsl", "VSMain", "vs_5_0");
   auto ps = CompileShaderSafe(L"shaders/basic3d.hlsl", "PSMain", "ps_5_0");
   if (vs.success && ps.success) {

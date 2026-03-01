@@ -66,7 +66,7 @@ std::string MeshRenderer::ReloadShaders(DxContext &dx) {
   std::string errors;
 
   // ---- Forward pass (mesh.hlsl) ----
-  {
+  if (m_rootSig) {
     auto vs = CompileShaderSafe(L"shaders/mesh.hlsl", "VSMain", "vs_5_1");
     auto ps = CompileShaderSafe(L"shaders/mesh.hlsl", "PSMain", "ps_5_1");
     if (vs.success && ps.success) {
@@ -114,7 +114,7 @@ std::string MeshRenderer::ReloadShaders(DxContext &dx) {
   }
 
   // ---- G-buffer pass (gbuffer.hlsl) ----
-  {
+  if (m_gbufferRootSig) {
     auto vs = CompileShaderSafe(L"shaders/gbuffer.hlsl", "VSMain", "vs_5_1");
     auto ps = CompileShaderSafe(L"shaders/gbuffer.hlsl", "PSMain", "ps_5_1");
     if (vs.success && ps.success) {
@@ -164,7 +164,7 @@ std::string MeshRenderer::ReloadShaders(DxContext &dx) {
   }
 
   // ---- Shadow pass (shadow.hlsl) ----
-  {
+  if (m_shadowRootSig) {
     auto vs = CompileShaderSafe(L"shaders/shadow.hlsl", "VSMain", "vs_5_1");
     if (vs.success) {
       D3D12_INPUT_ELEMENT_DESC inputElems[] = {
@@ -206,7 +206,7 @@ std::string MeshRenderer::ReloadShaders(DxContext &dx) {
   }
 
   // ---- Wireframe pass (highlight.hlsl) ----
-  {
+  if (m_wireframeRootSig) {
     auto vs = CompileShaderSafe(L"shaders/highlight.hlsl", "VSMain", "vs_5_1");
     auto ps = CompileShaderSafe(L"shaders/highlight.hlsl", "PSMain", "ps_5_1");
     if (vs.success && ps.success) {

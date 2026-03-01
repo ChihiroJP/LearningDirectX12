@@ -29,3 +29,4 @@ Makefile
 .cache
 .claude
 .idea
+nul

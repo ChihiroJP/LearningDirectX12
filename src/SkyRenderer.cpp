@@ -332,6 +332,7 @@ void SkyRenderer::Draw(DxContext &dx, const DirectX::XMMATRIX &view,
 
 std::string SkyRenderer::ReloadShaders(DxContext &dx) {
   std::string errors;
+  if (!m_rootSig) return errors;
   auto vs = CompileShaderSafe(L"shaders/sky.hlsl", "VSMain", "vs_5_0");
   auto ps = CompileShaderSafe(L"shaders/sky.hlsl", "PSMain", "ps_5_0");
   if (vs.success && ps.success) {

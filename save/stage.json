@@ -132,17 +132,13 @@
       "type": "Ice"
     },
     null,
-    {
-      "type": "Crumble"
-    },
-    {
-      "type": "Crumble"
-    },
+    null,
+    null,
     {
       "type": "Spike"
     },
     {
-      "type": "Crumble"
+      "type": "Spike"
     },
     {
       "type": "Spike"
@@ -167,12 +163,8 @@
       "wall": true,
       "wallDestructible": true
     },
-    {
-      "type": "Crumble"
-    },
-    {
-      "type": "Crumble"
-    },
+    null,
+    null,
     {
       "type": "Spike"
     },

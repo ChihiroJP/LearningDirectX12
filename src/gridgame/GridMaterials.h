@@ -13,7 +13,7 @@
 static inline Material MakeFloorMaterial() {
   Material m;
   m.baseColorFactor = {0.06f, 0.06f, 0.09f, 1.0f};
-  m.emissiveFactor = {0.0f, 0.02f, 0.04f};
+  m.emissiveFactor = {0.0f, 0.04f, 0.08f};
   m.metallicFactor = 0.2f;
   m.roughnessFactor = 0.7f;
   return m;
@@ -40,7 +40,7 @@ static inline Material MakeDestructibleWallMaterial() {
 static inline Material MakeFireMaterial() {
   Material m;
   m.baseColorFactor = {0.15f, 0.04f, 0.02f, 1.0f};
-  m.emissiveFactor = {1.0f, 0.3f, 0.05f};
+  m.emissiveFactor = {2.0f, 0.6f, 0.1f};
   m.metallicFactor = 0.0f;
   m.roughnessFactor = 0.9f;
   return m;
@@ -49,7 +49,7 @@ static inline Material MakeFireMaterial() {
 static inline Material MakeLightningMaterial() {
   Material m;
   m.baseColorFactor = {0.05f, 0.06f, 0.12f, 1.0f};
-  m.emissiveFactor = {0.1f, 0.2f, 0.6f};
+  m.emissiveFactor = {0.2f, 0.4f, 1.2f};
   m.metallicFactor = 0.1f;
   m.roughnessFactor = 0.8f;
   return m;
@@ -58,7 +58,7 @@ static inline Material MakeLightningMaterial() {
 static inline Material MakeSpikeMaterial() {
   Material m;
   m.baseColorFactor = {0.12f, 0.12f, 0.10f, 1.0f};
-  m.emissiveFactor = {0.15f, 0.08f, 0.02f};
+  m.emissiveFactor = {0.5f, 0.2f, 0.05f};
   m.metallicFactor = 0.6f;
   m.roughnessFactor = 0.3f;
   return m;
@@ -67,7 +67,7 @@ static inline Material MakeSpikeMaterial() {
 static inline Material MakeIceMaterial() {
   Material m;
   m.baseColorFactor = {0.08f, 0.15f, 0.20f, 1.0f};
-  m.emissiveFactor = {0.05f, 0.3f, 0.8f};
+  m.emissiveFactor = {0.1f, 0.5f, 1.5f};
   m.metallicFactor = 0.1f;
   m.roughnessFactor = 0.2f;
   return m;
@@ -85,7 +85,7 @@ static inline Material MakeCrumbleMaterial() {
 static inline Material MakeStartMaterial() {
   Material m;
   m.baseColorFactor = {0.05f, 0.12f, 0.06f, 1.0f};
-  m.emissiveFactor = {0.0f, 0.5f, 0.2f};
+  m.emissiveFactor = {0.0f, 1.0f, 0.4f};
   m.metallicFactor = 0.2f;
   m.roughnessFactor = 0.6f;
   return m;
@@ -94,7 +94,7 @@ static inline Material MakeStartMaterial() {
 static inline Material MakeGoalMaterial() {
   Material m;
   m.baseColorFactor = {0.15f, 0.12f, 0.02f, 1.0f};
-  m.emissiveFactor = {1.0f, 0.8f, 0.1f};
+  m.emissiveFactor = {2.0f, 1.6f, 0.2f};
   m.metallicFactor = 0.3f;
   m.roughnessFactor = 0.4f;
   return m;
@@ -105,7 +105,7 @@ static inline Material MakeGoalMaterial() {
 static inline Material MakePlayerMaterial() {
   Material m;
   m.baseColorFactor = {0.0f, 0.6f, 0.9f, 1.0f};
-  m.emissiveFactor = {0.0f, 0.5f, 1.0f};
+  m.emissiveFactor = {0.0f, 0.8f, 2.0f};
   m.metallicFactor = 0.4f;
   m.roughnessFactor = 0.3f;
   return m;
@@ -113,17 +113,17 @@ static inline Material MakePlayerMaterial() {
 
 static inline Material MakeCargoMaterial() {
   Material m;
-  m.baseColorFactor = {0.9f, 0.7f, 0.1f, 1.0f};
-  m.emissiveFactor = {1.0f, 0.6f, 0.0f};
-  m.metallicFactor = 0.5f;
-  m.roughnessFactor = 0.3f;
+  m.baseColorFactor = {1.0f, 1.0f, 1.0f, 1.0f};  // white — let texture show through
+  m.emissiveFactor = {0.0f, 0.0f, 0.0f};           // no self-glow, lit by point light
+  m.metallicFactor = 0.2f;
+  m.roughnessFactor = 0.8f;
   return m;
 }
 
 static inline Material MakeTowerMaterial() {
   Material m;
   m.baseColorFactor = {0.5f, 0.1f, 0.1f, 1.0f};
-  m.emissiveFactor = {0.8f, 0.1f, 0.05f};
+  m.emissiveFactor = {1.5f, 0.2f, 0.1f};
   m.metallicFactor = 0.5f;
   m.roughnessFactor = 0.4f;
   return m;
@@ -135,6 +135,75 @@ static inline Material MakeTelegraphMaterial() {
   m.emissiveFactor = {1.0f, 0.15f, 0.1f};
   m.metallicFactor = 0.0f;
   m.roughnessFactor = 1.0f;
+  return m;
+}
+
+// ---- Grid edge line material (neon grid) ----
+
+static inline Material MakeGridLineMaterial() {
+  Material m;
+  m.baseColorFactor = {0.02f, 0.04f, 0.08f, 1.0f};
+  m.emissiveFactor = {0.0f, 0.15f, 0.3f};
+  m.metallicFactor = 0.3f;
+  m.roughnessFactor = 0.4f;
+  return m;
+}
+
+// ---- Tile border glow materials (bright outlines around special tiles) ----
+
+static inline Material MakeBorderOrangeMaterial() {
+  Material m;
+  m.baseColorFactor = {0.3f, 0.08f, 0.02f, 1.0f};
+  m.emissiveFactor = {3.0f, 0.8f, 0.1f};
+  m.metallicFactor = 0.0f;
+  m.roughnessFactor = 0.5f;
+  return m;
+}
+
+static inline Material MakeBorderCyanMaterial() {
+  Material m;
+  m.baseColorFactor = {0.02f, 0.15f, 0.3f, 1.0f};
+  m.emissiveFactor = {0.1f, 0.8f, 2.5f};
+  m.metallicFactor = 0.0f;
+  m.roughnessFactor = 0.5f;
+  return m;
+}
+
+static inline Material MakeBorderGreenMaterial() {
+  Material m;
+  m.baseColorFactor = {0.02f, 0.2f, 0.05f, 1.0f};
+  m.emissiveFactor = {0.0f, 1.5f, 0.5f};
+  m.metallicFactor = 0.0f;
+  m.roughnessFactor = 0.5f;
+  return m;
+}
+
+static inline Material MakeBorderGoldMaterial() {
+  Material m;
+  m.baseColorFactor = {0.3f, 0.25f, 0.02f, 1.0f};
+  m.emissiveFactor = {3.0f, 2.0f, 0.3f};
+  m.metallicFactor = 0.0f;
+  m.roughnessFactor = 0.5f;
+  return m;
+}
+
+static inline Material MakeBorderRedMaterial() {
+  Material m;
+  m.baseColorFactor = {0.3f, 0.05f, 0.05f, 1.0f};
+  m.emissiveFactor = {2.5f, 0.3f, 0.2f};
+  m.metallicFactor = 0.0f;
+  m.roughnessFactor = 0.5f;
+  return m;
+}
+
+// ---- Player trail glow material ----
+
+static inline Material MakeTrailMaterial() {
+  Material m;
+  m.baseColorFactor = {0.02f, 0.08f, 0.15f, 1.0f};
+  m.emissiveFactor = {0.0f, 0.3f, 0.8f};
+  m.metallicFactor = 0.0f;
+  m.roughnessFactor = 0.5f;
   return m;
 }
 

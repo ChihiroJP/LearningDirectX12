@@ -86,7 +86,8 @@ void GridMap::DestroyCrumble(int x, int y) {
 
 void GridMap::BuildRenderItems(const GridMeshIds &ids,
                                std::vector<RenderItem> &outItems,
-                               std::vector<GPUPointLight> &outLights) const {
+                               std::vector<GPUPointLight> &outLights,
+                               float gameTime) const {
   for (int y = 0; y < m_height; ++y) {
     for (int x = 0; x < m_width; ++x) {
       const Tile &t = At(x, y);
@@ -139,6 +140,12 @@ void GridMap::BuildRenderItems(const GridMeshIds &ids,
         world = XMMatrixTranslation(center.x, 0.5f, center.z);
       }
 
+      // Spike visual: raise when active, flat when inactive.
+      if (t.type == TileType::Spike) {
+        float spikeY = t.hazardActive ? 0.15f : 0.0f;
+        world = XMMatrixTranslation(center.x, spikeY, center.z);
+      }
+
       outItems.push_back({meshId, world});
 
       // If tile has a placed wall (not Wall type), render wall cube on top.
@@ -151,28 +158,43 @@ void GridMap::BuildRenderItems(const GridMeshIds &ids,
             {wallMesh, XMMatrixTranslation(center.x, 0.5f, center.z)});
       }
 
-      // Point lights for hazard tiles (budget-conscious: only add for active
-      // hazards).
+      // Point lights for hazard tiles with animated glow.
+      // Phase offset per tile so they don't all pulse in sync.
+      float phase = static_cast<float>(x * 7 + y * 13);
+
       if (t.type == TileType::Fire) {
+        // Fire: high-frequency flicker.
+        float flicker = 1.5f + 0.5f * sinf(gameTime * 8.0f + phase);
         GPUPointLight pl{};
         pl.position = {center.x, 0.5f, center.z};
-        pl.range = 2.0f;
-        pl.color = {1.0f, 0.4f, 0.05f}; // orange
-        pl.intensity = 1.5f;
+        pl.range = 2.5f;
+        pl.color = {1.0f, 0.4f, 0.05f};
+        pl.intensity = flicker;
         outLights.push_back(pl);
       } else if (t.type == TileType::Lightning && t.hazardActive) {
+        // Lightning: sharp electric pulse.
+        float pulse = 0.5f + 0.5f * sinf(gameTime * 12.0f + phase);
         GPUPointLight pl{};
         pl.position = {center.x, 0.5f, center.z};
-        pl.range = 3.0f;
-        pl.color = {0.3f, 0.5f, 1.0f}; // blue
-        pl.intensity = 3.0f;
+        pl.range = 3.5f;
+        pl.color = {0.3f, 0.5f, 1.0f};
+        pl.intensity = 3.0f * pulse;
+        outLights.push_back(pl);
+      } else if (t.type == TileType::Spike && t.hazardActive) {
+        GPUPointLight pl{};
+        pl.position = {center.x, 0.5f, center.z};
+        pl.range = 2.5f;
+        pl.color = {1.0f, 0.3f, 0.3f};
+        pl.intensity = 2.0f;
         outLights.push_back(pl);
       } else if (t.type == TileType::Ice) {
+        // Ice: slow cold pulse.
+        float pulse = 0.8f + 0.3f * sinf(gameTime * 2.0f + phase);
         GPUPointLight pl{};
         pl.position = {center.x, 0.3f, center.z};
-        pl.range = 1.5f;
-        pl.color = {0.2f, 0.6f, 1.0f}; // cyan
-        pl.intensity = 0.8f;
+        pl.range = 2.0f;
+        pl.color = {0.2f, 0.6f, 1.0f};
+        pl.intensity = pulse;
         outLights.push_back(pl);
       }
     }

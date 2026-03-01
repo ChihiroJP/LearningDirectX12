@@ -314,7 +314,7 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int nCmdShow) {
     DirectX::XMVECTOR firePos = DirectX::XMVectorSet(0.0f, 1.0f, 0.0f, 0.0f);
     NormalEmitter fireEmitter(512, firePos, 120.0, true);
     float particleDepth = 8.0f;
-    bool particlesEnabled = true;
+    bool particlesEnabled = false;
     bool fireEnabled = true;
 
     DirectX::XMVECTOR smokePos = DirectX::XMVectorSet(-3.0f, 0.0f, 3.0f, 0.0f);
@@ -409,6 +409,7 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int nCmdShow) {
         if (f5Now && !prevF5) {
           if (playTesting) {
             // Branch 1: stop grid play-test.
+            gridGame.ResetToMainMenu();
             appMode = AppMode::Editor;
             playTesting = false;
           } else if (scenePlayMode) {

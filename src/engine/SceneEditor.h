@@ -172,7 +172,7 @@ private:
   char m_presetName[64] = "Preset";
 
   // ---- Grid Editor state (Phase 5) ----
-  bool m_gridEditorOpen = false;
+  bool m_gridEditorOpen = true;
   CommandHistory m_gridHistory;
   char m_stagePath[256] = "stage.json";
 

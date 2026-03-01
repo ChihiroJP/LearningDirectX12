@@ -81,7 +81,8 @@ public:
   // Build render items for all visible tiles.
   void BuildRenderItems(const GridMeshIds &meshIds,
                         std::vector<RenderItem> &outItems,
-                        std::vector<GPUPointLight> &outLights) const;
+                        std::vector<GPUPointLight> &outLights,
+                        float gameTime = 0.0f) const;
 
 private:
   int m_width = 0;
