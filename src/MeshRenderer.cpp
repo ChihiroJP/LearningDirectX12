@@ -529,7 +529,7 @@ void MeshRenderer::DrawMeshGBufferInstanced(
     DxContext &dx, uint32_t meshId,
     const std::vector<DirectX::XMMATRIX> &worlds,
     const DirectX::XMMATRIX &view, const DirectX::XMMATRIX &proj,
-    const DirectX::XMFLOAT3 &cameraPos) {
+    const DirectX::XMFLOAT3 &cameraPos, float gameTime) {
   CreateGBufferPipelineOnce(dx);
 
   if (meshId >= m_meshes.size() || worlds.empty())
@@ -552,6 +552,7 @@ void MeshRenderer::DrawMeshGBufferInstanced(
     DirectX::XMFLOAT4 pomParams;
     DirectX::XMFLOAT4 baseColorFactor; // rgba multiplier
     DirectX::XMFLOAT4 uvTilingOffset;  // xy=tiling, zw=offset
+    DirectX::XMFLOAT4 animParams;      // x=gameTime, y=materialTypeId
   };
 
   GBufferCB cb{};
@@ -568,6 +569,7 @@ void MeshRenderer::DrawMeshGBufferInstanced(
   cb.baseColorFactor = mat.baseColorFactor;
   cb.uvTilingOffset = {mat.uvTiling.x, mat.uvTiling.y,
                        mat.uvOffset.x, mat.uvOffset.y};
+  cb.animParams = {gameTime, mat.proceduralTypeId, 0.0f, 0.0f};
 
   void *cbCpu = nullptr;
   D3D12_GPU_VIRTUAL_ADDRESS cbGpu =
@@ -1084,7 +1086,8 @@ void MeshRenderer::DrawMeshInstanced(
     DxContext &dx, uint32_t meshId,
     const std::vector<DirectX::XMMATRIX> &worlds,
     const DirectX::XMMATRIX &view, const DirectX::XMMATRIX &proj,
-    const LightParams &lighting, const MeshShadowParams &shadow) {
+    const LightParams &lighting, const MeshShadowParams &shadow,
+    float gameTime) {
   if (!m_pso || !m_rootSig)
     return;
   if (meshId >= m_meshes.size() || worlds.empty())
@@ -1117,6 +1120,7 @@ void MeshRenderer::DrawMeshInstanced(
     DirectX::XMFLOAT4 pomParams;           // x = heightScale, y = minLayers, z = maxLayers, w = enabled
     DirectX::XMFLOAT4 baseColorFactor;     // rgba multiplier
     DirectX::XMFLOAT4 uvTilingOffset;      // xy=tiling, zw=offset
+    DirectX::XMFLOAT4 animParams;          // x=gameTime, y=materialTypeId
   };
 
   MeshCB cb{};
@@ -1154,6 +1158,7 @@ void MeshRenderer::DrawMeshInstanced(
   cb.baseColorFactor = mat.baseColorFactor;
   cb.uvTilingOffset = {mat.uvTiling.x, mat.uvTiling.y,
                        mat.uvOffset.x, mat.uvOffset.y};
+  cb.animParams = {gameTime, mat.proceduralTypeId, 0.0f, 0.0f};
 
   void *cbCpu = nullptr;
   D3D12_GPU_VIRTUAL_ADDRESS cbGpu =

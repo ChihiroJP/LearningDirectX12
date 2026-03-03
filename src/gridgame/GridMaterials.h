@@ -43,6 +43,7 @@ static inline Material MakeFireMaterial() {
   m.emissiveFactor = {2.0f, 0.6f, 0.1f};
   m.metallicFactor = 0.0f;
   m.roughnessFactor = 0.9f;
+  m.proceduralTypeId = 1.0f;
   return m;
 }
 
@@ -52,6 +53,7 @@ static inline Material MakeLightningMaterial() {
   m.emissiveFactor = {0.2f, 0.4f, 1.2f};
   m.metallicFactor = 0.1f;
   m.roughnessFactor = 0.8f;
+  m.proceduralTypeId = 3.0f;
   return m;
 }
 
@@ -61,6 +63,7 @@ static inline Material MakeSpikeMaterial() {
   m.emissiveFactor = {0.5f, 0.2f, 0.05f};
   m.metallicFactor = 0.6f;
   m.roughnessFactor = 0.3f;
+  m.proceduralTypeId = 4.0f;
   return m;
 }
 
@@ -70,6 +73,7 @@ static inline Material MakeIceMaterial() {
   m.emissiveFactor = {0.1f, 0.5f, 1.5f};
   m.metallicFactor = 0.1f;
   m.roughnessFactor = 0.2f;
+  m.proceduralTypeId = 2.0f;
   return m;
 }
 
@@ -79,6 +83,7 @@ static inline Material MakeCrumbleMaterial() {
   m.emissiveFactor = {0.03f, 0.02f, 0.01f};
   m.metallicFactor = 0.0f;
   m.roughnessFactor = 0.9f;
+  m.proceduralTypeId = 5.0f;
   return m;
 }
 

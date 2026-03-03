@@ -22,6 +22,7 @@ A **tactical cargo-push puzzle game** on a danger grid with a **cyber/neon aesth
 - Post-processing: bloom, depth of field, motion blur, TAA, FXAA, SSAO, tonemapping
 - Particle system (CPU billboard, GPU rendered)
 - Instanced mesh rendering
+- Procedural tile shaders (animated HLSL noise: lava, ice, lightning, spike, crumble)
 - Multiple point/spot lights (32 each, deferred)
 - Dear ImGui debug UI
 - Resolution support (fullscreen, borderless, windowed at 720p/1080p/1440p/4K)
@@ -90,6 +91,7 @@ notes/                  Learning notes / architecture docs
 - ✅ **Phase 6 — VFX & visual polish**: Neon glow aesthetic (bloom tuning, boosted emissives, animated glow pulsing, neon grid lines, colored tile borders, player trail, goal beacon, fire ember + ice crystal particles)
 - ✅ **Phase 7 — UI polish**: Neon-themed Main Menu (pulsing title, styled buttons), HUD (time/moves/hearts/pull badge/stun indicator), Pause (dim overlay, controls reminder), Stage Complete (rating S/A/B/C, stats), Stage Fail (retry prompt), cargo rock texture
 - ✅ **Phase 8 — Particle & VFX system**: BurstEmitter architecture (one-shot spawns, auto-cleanup), 10 new particle effects — combat (tower fire burst, beam impact sparks, damage hit, wall debris, crumble debris), hazards (lightning strike sparks, spike trap sparks), environment (goal beacon with spiral drift, tower idle wisps), player (move sparks). HDR colors for automatic bloom glow. kMaxParticles 1024→2048.
+- ✅ **Phase 9 — Animated procedural tile shaders**: Fully procedural HLSL surface effects on hazard tiles — fire (domain-warped FBM lava flow + wave motion), ice (voronoi crystal facets + shimmer sparkle), lightning (electric arcs + periodic flash), spike (FBM dark metal + groove glow), crumble (voronoi cracks + stone texture). No external textures. Branch-coherent via instanced batching.
 
 ### Milestone 4: Game Engine (Editor & Runtime Tools)
 - ✅ **Phase 0 — Scene & Object Model**: Entity/component registry, scene graph, serialization (JSON), runtime create/destroy objects, editor selection highlight, viewport mouse picking

@@ -23,6 +23,9 @@ struct Material {
   DirectX::XMFLOAT2 uvTiling = {1.0f, 1.0f};
   DirectX::XMFLOAT2 uvOffset = {0.0f, 0.0f};
 
+  // Procedural tile shader type (0 = none, 1 = fire, 2 = ice, etc.)
+  float proceduralTypeId = 0.0f;
+
   // Parallax Occlusion Mapping (per-material, not all meshes have height maps)
   bool  pomEnabled   = false;
   float heightScale  = 0.02f;

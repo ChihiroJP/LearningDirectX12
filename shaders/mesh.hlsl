@@ -13,6 +13,7 @@ cbuffer MeshCB : register(b0)
     float4   gPOMParams;          // x = heightScale, y = minLayers, z = maxLayers, w = enabled
     float4   gBaseColorFactor;    // rgba multiplier for base color
     float4   gUVTilingOffset;     // xy=tiling, zw=offset
+    float4   gAnimParams;        // x=gameTime, y=materialTypeId
 };
 
 // Per-instance world matrices (Phase 12.5 — Instanced Rendering).
@@ -81,6 +82,8 @@ TextureCube<float4> gIrradianceMap  : register(t7);
 TextureCube<float4> gPrefilteredMap : register(t8);
 Texture2D<float2>   gBrdfLUT       : register(t9);
 SamplerState        gIBLSampler    : register(s2);
+
+#include "procedural_tiles.hlsli"
 
 static const float PI = 3.14159265f;
 
@@ -192,6 +195,23 @@ PSOut PSMain(PSIn i)
 
     // AO texture (single channel, applied to ambient only).
     float ao = gAOMap.Sample(gSam, uv).r;
+
+    // ---- Procedural tile override (Phase 9) ----
+    float3 procEmissive = float3(0.0f, 0.0f, 0.0f);
+    bool procActive = false;
+    {
+        ProceduralResult procResult;
+        if (ApplyProceduralTile(i.posW, gAnimParams.x, gAnimParams.y, procResult))
+        {
+            albedo    = procResult.albedo;
+            procEmissive = procResult.emissive;
+            metallic  = procResult.metallic;
+            roughness = max(procResult.roughness, 0.045f);
+            ao        = procResult.ao;
+            N = normalize(mul(procResult.normalTS, TBN));
+            procActive = true;
+        }
+    }
 
     float3 V = normalize(gCameraPos.xyz - i.posW);
 
@@ -305,6 +325,11 @@ PSOut PSMain(PSIn i)
     }
 
     // Emissive: add before tonemap so bloom picks it up.
+    if (procActive)
+    {
+        color += procEmissive;
+    }
+    else
     {
         float3 emissive = gEmissiveMap.Sample(gSam, uv).rgb;
         color += emissive * gEmissiveFactor.rgb;

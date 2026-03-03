@@ -103,6 +103,9 @@ struct FrameData {
   float taaBlendFactor = 0.05f;
   DirectX::XMMATRIX invViewProjUnjittered = DirectX::XMMatrixIdentity();
   DirectX::XMMATRIX prevViewProjUnjittered = DirectX::XMMatrixIdentity();
+
+  // Procedural tile animation (Phase 9)
+  float gameTime = 0.0f;
 };
 
 // Base class for all render passes.

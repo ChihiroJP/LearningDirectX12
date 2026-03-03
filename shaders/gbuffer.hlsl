@@ -15,6 +15,7 @@ cbuffer GBufferCB : register(b0)
     float4   gPOMParams;        // x=heightScale, y=minLayers, z=maxLayers, w=enabled
     float4   gBaseColorFactor;  // rgba multiplier for base color
     float4   gUVTilingOffset;   // xy=tiling, zw=offset
+    float4   gAnimParams;      // x=gameTime, y=materialTypeId
 };
 
 // Per-instance world matrices (Phase 12.5 — Instanced Rendering).
@@ -54,6 +55,8 @@ Texture2D gAOMap          : register(t3);
 Texture2D gEmissiveMap    : register(t4);
 Texture2D gHeightMap      : register(t5);
 SamplerState gSam         : register(s0);
+
+#include "procedural_tiles.hlsli"
 
 // Parallax Occlusion Mapping: ray-march through height field to find offset UV.
 float2 ParallaxOcclusionMap(float2 uv, float3 viewDirTS, float heightScale,
@@ -138,6 +141,19 @@ PSOut PSMain(PSIn i)
     float ao = gAOMap.Sample(gSam, uv).r;
 
     float3 emissive = gEmissiveMap.Sample(gSam, uv).rgb * gEmissiveFactor.rgb;
+
+    // ---- Procedural tile override (Phase 9) ----
+    ProceduralResult procResult;
+    if (ApplyProceduralTile(i.posW, gAnimParams.x, gAnimParams.y, procResult))
+    {
+        albedo    = procResult.albedo;
+        emissive  = procResult.emissive;
+        metallic  = procResult.metallic;
+        roughness = max(procResult.roughness, 0.045f);
+        ao        = procResult.ao;
+        // Apply procedural normal in tangent space
+        N = normalize(mul(procResult.normalTS, TBN));
+    }
 
     // ---- Pack to G-buffer ----
     PSOut output;

@@ -1310,6 +1310,9 @@ void GridGame::BuildScene(FrameData &frame) {
 
   m_camera->SetYawPitch(lookYaw, lookPitch);
 
+  // Procedural tile animation time.
+  frame.gameTime = m_stageTimer;
+
   // Build grid tiles.
   m_map.BuildRenderItems(m_meshIds, frame.opaqueItems, frame.pointLights,
                          m_stageTimer);

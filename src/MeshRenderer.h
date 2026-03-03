@@ -62,7 +62,8 @@ public:
                                 const std::vector<DirectX::XMMATRIX> &worlds,
                                 const DirectX::XMMATRIX &view,
                                 const DirectX::XMMATRIX &proj,
-                                const DirectX::XMFLOAT3 &cameraPos);
+                                const DirectX::XMFLOAT3 &cameraPos,
+                                float gameTime = 0.0f);
 
   void DrawMeshShadowInstanced(DxContext &dx, uint32_t meshId,
                                const std::vector<DirectX::XMMATRIX> &worlds,
@@ -73,7 +74,8 @@ public:
                          const DirectX::XMMATRIX &view,
                          const DirectX::XMMATRIX &proj,
                          const LightParams &lighting,
-                         const MeshShadowParams &shadow);
+                         const MeshShadowParams &shadow,
+                         float gameTime = 0.0f);
 
   void SetIBLDescriptors(D3D12_GPU_DESCRIPTOR_HANDLE iblTableBase);
 
