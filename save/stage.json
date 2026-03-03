@@ -3,7 +3,7 @@
     1,
     2
   ],
-  "height": 8,
+  "height": 18,
   "name": "Untitled",
   "playerSpawn": [
     0,
@@ -40,6 +40,24 @@
     {
       "type": "Wall"
     },
+    {
+      "type": "Wall"
+    },
+    {
+      "type": "Wall"
+    },
+    {
+      "type": "Wall"
+    },
+    {
+      "type": "Wall"
+    },
+    {
+      "type": "Wall"
+    },
+    {
+      "type": "Wall"
+    },
     null,
     {
       "type": "Fire"
@@ -58,6 +76,24 @@
     },
     {
       "type": "Fire"
+    },
+    {
+      "type": "Wall"
+    },
+    {
+      "type": "Wall"
+    },
+    {
+      "type": "Wall"
+    },
+    {
+      "type": "Wall"
+    },
+    {
+      "type": "Wall"
+    },
+    {
+      "type": "Wall"
     },
     {
       "type": "Wall"
@@ -86,6 +122,14 @@
       "type": "Ice"
     },
     null,
+    null,
+    null,
+    null,
+    null,
+    {
+      "type": "Wall"
+    },
+    null,
     {
       "type": "Fire"
     },
@@ -113,6 +157,22 @@
       "type": "Lightning"
     },
     null,
+    {
+      "type": "Ice"
+    },
+    {
+      "type": "Ice"
+    },
+    {
+      "type": "Ice"
+    },
+    {
+      "type": "Ice"
+    },
+    {
+      "type": "Wall"
+    },
+    null,
     null,
     {
       "wall": true,
@@ -132,14 +192,34 @@
       "type": "Ice"
     },
     null,
-    null,
-    null,
     {
-      "type": "Spike"
+      "type": "Wall"
+    },
+    {
+      "type": "Wall"
+    },
+    {
+      "type": "Wall"
+    },
+    {
+      "type": "Lightning"
+    },
+    {
+      "type": "Lightning"
+    },
+    {
+      "type": "Lightning"
+    },
+    {
+      "type": "Lightning"
+    },
+    {
+      "type": "Wall"
     },
     {
       "type": "Spike"
     },
+    null,
     {
       "type": "Spike"
     },
@@ -163,18 +243,40 @@
       "wall": true,
       "wallDestructible": true
     },
-    null,
+    {
+      "type": "Fire"
+    },
+    {
+      "type": "Fire"
+    },
+    {
+      "type": "Wall"
+    },
+    {
+      "type": "Fire"
+    },
+    {
+      "type": "Fire"
+    },
+    {
+      "type": "Fire"
+    },
+    {
+      "type": "Fire"
+    },
+    {
+      "type": "Wall"
+    },
+    {
+      "type": "Spike"
+    },
     null,
     {
       "type": "Spike"
     },
     {
-      "type": "Spike"
+      "type": "Wall"
     },
-    {
-      "type": "Spike"
-    },
-    null,
     {
       "type": "Fire"
     },
@@ -194,22 +296,446 @@
       "type": "Fire"
     },
     {
-      "type": "Spike"
+      "type": "Wall"
+    },
+    null,
+    null,
+    null,
+    null,
+    {
+      "type": "Wall"
     },
     {
       "type": "Spike"
     },
+    null,
     {
       "type": "Spike"
+    },
+    {
+      "type": "Wall"
     },
     null,
     null,
     null,
     null,
+    {
+      "type": "Wall"
+    },
     null,
+    {
+      "type": "Wall"
+    },
+    {
+      "type": "Fire"
+    },
+    {
+      "type": "Fire"
+    },
+    {
+      "type": "Fire"
+    },
     null,
+    {
+      "type": "Wall"
+    },
+    {
+      "type": "Spike"
+    },
+    null,
+    {
+      "type": "Spike"
+    },
+    {
+      "type": "Wall"
+    },
     {
       "type": "Goal"
+    },
+    {
+      "type": "Goal"
+    },
+    {
+      "type": "Goal"
+    },
+    {
+      "type": "Goal"
+    },
+    {
+      "type": "Wall"
+    },
+    null,
+    {
+      "type": "Wall"
+    },
+    {
+      "type": "Fire"
+    },
+    null,
+    {
+      "type": "Fire"
+    },
+    {
+      "type": "Fire"
+    },
+    {
+      "type": "Wall"
+    },
+    {
+      "type": "Ice"
+    },
+    {
+      "type": "Ice"
+    },
+    {
+      "type": "Ice"
+    },
+    {
+      "type": "Wall"
+    },
+    {
+      "type": "Wall"
+    },
+    {
+      "type": "Wall"
+    },
+    {
+      "type": "Wall"
+    },
+    {
+      "type": "Wall"
+    },
+    {
+      "type": "Wall"
+    },
+    null,
+    {
+      "type": "Wall"
+    },
+    null,
+    null,
+    null,
+    null,
+    {
+      "type": "Wall"
+    },
+    {
+      "type": "Lightning"
+    },
+    null,
+    null,
+    null,
+    {
+      "type": "Ice"
+    },
+    {
+      "type": "Ice"
+    },
+    null,
+    {
+      "type": "Wall"
+    },
+    null,
+    {
+      "type": "Ice"
+    },
+    null,
+    {
+      "type": "Fire"
+    },
+    {
+      "type": "Fire"
+    },
+    {
+      "type": "Fire"
+    },
+    {
+      "type": "Fire"
+    },
+    {
+      "type": "Wall"
+    },
+    {
+      "type": "Lightning"
+    },
+    {
+      "type": "Spike"
+    },
+    {
+      "type": "Spike"
+    },
+    null,
+    null,
+    null,
+    null,
+    {
+      "type": "Wall"
+    },
+    null,
+    {
+      "type": "Ice"
+    },
+    null,
+    {
+      "type": "Wall"
+    },
+    {
+      "type": "Wall"
+    },
+    null,
+    {
+      "type": "Fire"
+    },
+    {
+      "type": "Wall"
+    },
+    {
+      "type": "Lightning"
+    },
+    {
+      "type": "Spike"
+    },
+    {
+      "type": "Spike"
+    },
+    {
+      "type": "Fire"
+    },
+    {
+      "type": "Fire"
+    },
+    {
+      "type": "Fire"
+    },
+    {
+      "type": "Fire"
+    },
+    {
+      "type": "Fire"
+    },
+    {
+      "type": "Fire"
+    },
+    {
+      "type": "Fire"
+    },
+    {
+      "type": "Ice"
+    },
+    null,
+    {
+      "type": "Wall"
+    },
+    null,
+    {
+      "type": "Fire"
+    },
+    {
+      "type": "Wall"
+    },
+    {
+      "type": "Lightning"
+    },
+    {
+      "type": "Ice"
+    },
+    {
+      "type": "Ice"
+    },
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    {
+      "type": "Fire"
+    },
+    {
+      "type": "Ice"
+    },
+    null,
+    {
+      "type": "Wall"
+    },
+    null,
+    null,
+    {
+      "type": "Wall"
+    },
+    {
+      "type": "Lightning"
+    },
+    {
+      "type": "Spike"
+    },
+    {
+      "type": "Spike"
+    },
+    {
+      "type": "Fire"
+    },
+    {
+      "type": "Fire"
+    },
+    null,
+    {
+      "type": "Fire"
+    },
+    {
+      "type": "Fire"
+    },
+    {
+      "type": "Fire"
+    },
+    {
+      "type": "Fire"
+    },
+    {
+      "type": "Ice"
+    },
+    {
+      "type": "Wall"
+    },
+    {
+      "type": "Wall"
+    },
+    {
+      "type": "Fire"
+    },
+    {
+      "type": "Fire"
+    },
+    {
+      "type": "Wall"
+    },
+    {
+      "type": "Lightning"
+    },
+    {
+      "type": "Spike"
+    },
+    {
+      "type": "Spike"
+    },
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    {
+      "type": "Fire"
+    },
+    {
+      "type": "Ice"
+    },
+    {
+      "type": "Wall"
+    },
+    null,
+    null,
+    {
+      "type": "Fire"
+    },
+    {
+      "type": "Wall"
+    },
+    {
+      "type": "Lightning"
+    },
+    {
+      "type": "Ice"
+    },
+    {
+      "type": "Ice"
+    },
+    {
+      "type": "Fire"
+    },
+    {
+      "type": "Fire"
+    },
+    {
+      "type": "Fire"
+    },
+    {
+      "type": "Fire"
+    },
+    {
+      "type": "Fire"
+    },
+    {
+      "type": "Fire"
+    },
+    {
+      "type": "Fire"
+    },
+    {
+      "type": "Ice"
+    },
+    {
+      "type": "Wall"
+    },
+    {
+      "type": "Fire"
+    },
+    {
+      "type": "Fire"
+    },
+    {
+      "type": "Fire"
+    },
+    {
+      "type": "Wall"
+    },
+    {
+      "type": "Lightning"
+    },
+    {
+      "type": "Spike"
+    },
+    {
+      "type": "Spike"
+    },
+    {
+      "type": "Wall"
+    },
+    {
+      "type": "Wall"
+    },
+    {
+      "type": "Wall"
+    },
+    {
+      "type": "Wall"
+    },
+    {
+      "type": "Wall"
+    },
+    {
+      "type": "Wall"
+    },
+    {
+      "type": "Wall"
+    },
+    {
+      "type": "Wall"
+    },
+    {
+      "type": "Wall"
+    },
+    {
+      "type": "Wall"
+    },
+    {
+      "type": "Wall"
+    },
+    {
+      "type": "Wall"
+    },
+    {
+      "type": "Wall"
     }
   ],
   "towers": [
@@ -223,5 +749,5 @@
     }
   ],
   "version": 1,
-  "width": 10
+  "width": 16
 }

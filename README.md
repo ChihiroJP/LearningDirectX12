@@ -86,7 +86,7 @@ notes/                  Learning notes / architecture docs
   - ✅ **3B — Attack beam & firing flash**: Beam laser VFX (stretched cube, high emissive, fade-out), tower point light flash on fire
   - ✅ **3C — Tower gameplay**: Damage application on fire, destructible wall destruction, idle tower breathing pulse
 - ✅ **Phase 4 — Hazards**: Fire (DOT), lightning (periodic burst), spike traps (damage + stun), ice (slide), crumbling tiles (break after step-off), HP system (3 hearts, i-frames, damage flash)
-- **Phase 5 — Stage system**: 25 stage definitions, stage select screen, timer + S/A/B/C rating
+- ⏭️ **Phase 5 — Stage system** *(skipped)*: 25 stage definitions, stage select screen, timer + S/A/B/C rating
 - ✅ **Phase 6 — VFX & visual polish**: Neon glow aesthetic (bloom tuning, boosted emissives, animated glow pulsing, neon grid lines, colored tile borders, player trail, goal beacon, fire ember + ice crystal particles)
 - ✅ **Phase 7 — UI polish**: Neon-themed Main Menu (pulsing title, styled buttons), HUD (time/moves/hearts/pull badge/stun indicator), Pause (dim overlay, controls reminder), Stage Complete (rating S/A/B/C, stats), Stage Fail (retry prompt), cargo rock texture
 - ✅ **Phase 8 — Particle & VFX system**: BurstEmitter architecture (one-shot spawns, auto-cleanup), 10 new particle effects — combat (tower fire burst, beam impact sparks, damage hit, wall debris, crumble debris), hazards (lightning strike sparks, spike trap sparks), environment (goal beacon with spiral drift, tower idle wisps), player (move sparks). HDR colors for automatic bloom glow. kMaxParticles 1024→2048.
