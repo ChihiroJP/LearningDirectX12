@@ -22,7 +22,7 @@ class DxContext;
 
 class ParticleRenderer {
 public:
-  static constexpr uint32_t kMaxParticles = 1024;
+  static constexpr uint32_t kMaxParticles = 2048;
 
   void Initialize(DxContext &dx);
   void DrawParticles(DxContext &dx, const std::vector<const Emitter*> &emitters,

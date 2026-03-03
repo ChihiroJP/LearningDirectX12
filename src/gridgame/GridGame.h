@@ -68,6 +68,10 @@ private:
   void UpdateHazards(float dt);
   void TakeDamage(int amount);
 
+  // Phase 3: tower system.
+  void InitTowers();
+  void UpdateTowers(float dt);
+
   // State.
   GridGameState m_state = GridGameState::MainMenu;
   bool m_wantsQuit = false;
@@ -176,6 +180,47 @@ private:
   std::vector<std::unique_ptr<Emitter>> m_gameEmitters;
   void CreateGameEmitters();  // spawns emitters at hazard tile positions
 
+  // Phase 8A: burst emitter pool (one-shot VFX).
+  std::vector<std::unique_ptr<Emitter>> m_burstEmitters;
+  void UpdateBurstEmitters(float dt);
+
+  // Phase 8A: spawn a burst emitter at position.
+  template <typename T, typename... Args>
+  void SpawnBurst(const DirectX::XMVECTOR& position, Args&&... args) {
+    auto em = std::make_unique<T>(position, std::forward<Args>(args)...);
+    m_burstEmitters.push_back(std::move(em));
+  }
+
   // Phase 7: UI animation timer (accumulated, drives sin/cos pulses).
   float m_uiTimer = 0.0f;
+
+  // Phase 3: tower runtime state.
+  enum class TowerPhase : uint8_t { Idle, Warn1, Warn2, Firing };
+
+  struct RuntimeTower {
+    TowerData data;
+    float timer = 0.0f;
+    int lastFireCycle = -1;
+    float fireFlashTimer = 0.0f;
+    std::vector<std::pair<int, int>> attackTiles;
+  };
+
+  std::vector<RuntimeTower> m_towers;
+
+  // Phase 8A: helper to get tower world position.
+  DirectX::XMFLOAT3 GetTowerWorldPos(const RuntimeTower& t) const;
+
+  static constexpr float kFireFlashDuration = 0.2f;
+  static constexpr float kWarn1LeadTime = 1.0f;  // telegraph starts 1s before fire
+  static constexpr float kWarn2LeadTime = 0.5f;  // intense warning 0.5s before fire
+
+  // Telegraph mesh IDs for 3-beat intensity levels.
+  uint32_t m_telegraphWarn1MeshId = UINT32_MAX;
+  uint32_t m_telegraphWarn2MeshId = UINT32_MAX;
+  uint32_t m_telegraphFireMeshId  = UINT32_MAX;
+
+  // Phase 3B: beam mesh ID.
+  uint32_t m_beamMeshId = UINT32_MAX;
+
+  TowerPhase GetTowerPhase(const RuntimeTower &t) const;
 };

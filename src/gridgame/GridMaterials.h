@@ -138,6 +138,47 @@ static inline Material MakeTelegraphMaterial() {
   return m;
 }
 
+// Phase 3A: 3-beat telegraph intensity levels.
+// Warn1 — dim red glow, "something's coming"
+static inline Material MakeTelegraphWarn1Material() {
+  Material m;
+  m.baseColorFactor = {0.15f, 0.03f, 0.03f, 1.0f};
+  m.emissiveFactor = {0.5f, 0.08f, 0.05f};
+  m.metallicFactor = 0.0f;
+  m.roughnessFactor = 1.0f;
+  return m;
+}
+
+// Warn2 — bright red pulse, "move NOW"
+static inline Material MakeTelegraphWarn2Material() {
+  Material m;
+  m.baseColorFactor = {0.4f, 0.06f, 0.06f, 1.0f};
+  m.emissiveFactor = {2.0f, 0.3f, 0.15f};
+  m.metallicFactor = 0.0f;
+  m.roughnessFactor = 1.0f;
+  return m;
+}
+
+// Fire flash — white-hot burst, maximum bloom
+static inline Material MakeTelegraphFireMaterial() {
+  Material m;
+  m.baseColorFactor = {1.0f, 0.6f, 0.5f, 1.0f};
+  m.emissiveFactor = {5.0f, 2.0f, 1.5f};
+  m.metallicFactor = 0.0f;
+  m.roughnessFactor = 1.0f;
+  return m;
+}
+
+// Phase 3B: beam laser material (very high emissive for intense bloom).
+static inline Material MakeBeamMaterial() {
+  Material m;
+  m.baseColorFactor = {1.0f, 0.4f, 0.3f, 1.0f};
+  m.emissiveFactor = {6.0f, 1.5f, 0.8f};
+  m.metallicFactor = 0.0f;
+  m.roughnessFactor = 1.0f;
+  return m;
+}
+
 // ---- Grid edge line material (neon grid) ----
 
 static inline Material MakeGridLineMaterial() {

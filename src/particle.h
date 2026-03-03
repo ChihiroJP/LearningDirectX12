@@ -106,6 +106,13 @@ private:
 protected:
 	virtual Particle* createParticle() = 0;
 
+	// Phase 8A: spawn a particle into the pool if capacity allows.
+	bool SpawnParticle() {
+		if (m_count >= m_capacity) return false;
+		m_particles[m_count++] = createParticle();
+		return true;
+	}
+
 	const DirectX::XMVECTOR& GetPosition() const {
 		return m_position;
 	}
@@ -151,6 +158,41 @@ public:
 	// DX12: Accessors for batch rendering (ParticleRenderer iterates particles).
 	size_t GetCount() const { return m_count; }
 	const Particle* GetParticle(size_t i) const { return m_particles[i]; }
+
+	// Phase 8A: capacity query helpers.
+	bool IsFull() const { return m_count >= m_capacity; }
+	size_t GetCapacity() const { return m_capacity; }
+};
+
+// Phase 8A: one-shot burst emitter — spawns N particles at once, then dies.
+class BurstEmitter : public Emitter {
+	size_t m_burstCount{};
+	bool m_fired = false;
+
+public:
+	BurstEmitter(size_t capacity, const DirectX::XMVECTOR& position, size_t burstCount)
+		: Emitter(capacity, position, 0.0, false)
+		, m_burstCount(burstCount)
+	{}
+
+	// Trigger burst at given position.
+	void Fire(const DirectX::XMVECTOR& position) {
+		SetPosition(position);
+		m_fired = false; // allow re-fire
+	}
+
+	void Update(double elapsed_time) override {
+		if (!m_fired) {
+			m_fired = true;
+			for (size_t i = 0; i < m_burstCount; ++i)
+				SpawnParticle();
+		}
+		Emitter::Update(elapsed_time);
+	}
+
+	bool IsFinished() const {
+		return m_fired && GetCount() == 0;
+	}
 };
 
 #endif // PARTICLE_H

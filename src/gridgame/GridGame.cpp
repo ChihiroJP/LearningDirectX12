@@ -13,6 +13,7 @@
 #include "../GltfLoader.h"
 #include "../ProceduralMesh.h"
 
+#include <algorithm>
 #include <imgui.h>
 
 using namespace DirectX;
@@ -119,6 +120,14 @@ void GridGame::Init(Camera &cam, DxContext &dx) {
   m_meshIds.telegraph =
       dx.CreateMeshResources(plane, {}, MakeTelegraphMaterial());
 
+  // Phase 3A: 3-beat telegraph intensity meshes.
+  m_telegraphWarn1MeshId = dx.CreateMeshResources(plane, {}, MakeTelegraphWarn1Material());
+  m_telegraphWarn2MeshId = dx.CreateMeshResources(plane, {}, MakeTelegraphWarn2Material());
+  m_telegraphFireMeshId  = dx.CreateMeshResources(plane, {}, MakeTelegraphFireMaterial());
+
+  // Phase 3B: beam laser mesh (stretched cube).
+  m_beamMeshId = dx.CreateMeshResources(cube, {}, MakeBeamMaterial());
+
   // Game object meshes.
   m_playerMeshId = dx.CreateMeshResources(cube, {}, MakePlayerMaterial());
 
@@ -167,12 +176,43 @@ void GridGame::Init(Camera &cam, DxContext &dx) {
 void GridGame::Shutdown() {
   m_map.Reset();
   m_gameEmitters.clear();
+  m_burstEmitters.clear();
+  m_towers.clear();
+}
+
+// ---- Phase 8A: burst emitter pool management ----
+
+void GridGame::UpdateBurstEmitters(float dt) {
+  for (auto &em : m_burstEmitters)
+    em->Update(static_cast<double>(dt));
+
+  // Erase finished burst emitters.
+  m_burstEmitters.erase(
+      std::remove_if(m_burstEmitters.begin(), m_burstEmitters.end(),
+                     [](const std::unique_ptr<Emitter> &em) {
+                       auto *burst = dynamic_cast<BurstEmitter *>(em.get());
+                       return burst && burst->IsFinished();
+                     }),
+      m_burstEmitters.end());
+}
+
+XMFLOAT3 GridGame::GetTowerWorldPos(const RuntimeTower &t) const {
+  float towerX = static_cast<float>(t.data.x);
+  float towerZ = static_cast<float>(t.data.y);
+  switch (t.data.side) {
+  case TowerSide::Left:   towerX = -1.0f; break;
+  case TowerSide::Right:  towerX = static_cast<float>(m_map.Width()); break;
+  case TowerSide::Top:    towerZ = -1.0f; break;
+  case TowerSide::Bottom: towerZ = static_cast<float>(m_map.Height()); break;
+  }
+  return {towerX, 0.8f, towerZ};
 }
 
 // ---- Phase 6: create particle emitters at hazard tile positions ----
 
 void GridGame::CreateGameEmitters() {
   m_gameEmitters.clear();
+  m_burstEmitters.clear();
 
   for (int y = 0; y < m_map.Height(); ++y) {
     for (int x = 0; x < m_map.Width(); ++x) {
@@ -186,6 +226,11 @@ void GridGame::CreateGameEmitters() {
       } else if (t.type == TileType::Ice) {
         auto pos = XMVectorSet(c.x, 0.05f, c.z, 0.0f);
         auto em = std::make_unique<IceCrystalEmitter>(32, pos, 8.0, true);
+        m_gameEmitters.push_back(std::move(em));
+      } else if (t.type == TileType::Goal) {
+        // Phase 8C: goal beacon particles.
+        auto pos = XMVectorSet(c.x, 0.1f, c.z, 0.0f);
+        auto em = std::make_unique<GoalBeaconEmitter>(24, pos, 7.0, true);
         m_gameEmitters.push_back(std::move(em));
       }
     }
@@ -228,6 +273,39 @@ void GridGame::LoadTestStage() {
   layout[7 * W + 6].type = TileType::Lightning;
 
   m_map.Init(W, H, layout);
+
+  // Phase 3: add test towers for telegraph testing.
+  // Populate m_towers directly — do NOT set m_hasStageData here,
+  // otherwise ReloadCurrentStage takes the wrong path.
+  {
+    m_towers.clear();
+
+    TowerData t1;
+    t1.x = 0;
+    t1.y = 4;  // fires across row 4
+    t1.side = TowerSide::Left;
+    t1.pattern = TowerPattern::Row;
+    t1.delay = 2.0f;
+    t1.interval = 4.0f;
+
+    RuntimeTower rt1;
+    rt1.data = t1;
+    rt1.attackTiles = ComputeAttackTiles(t1, W, H);
+    m_towers.push_back(std::move(rt1));
+
+    TowerData t2;
+    t2.x = 6;
+    t2.y = 0;  // fires down column 6
+    t2.side = TowerSide::Top;
+    t2.pattern = TowerPattern::Column;
+    t2.delay = 3.0f;
+    t2.interval = 5.0f;
+
+    RuntimeTower rt2;
+    rt2.data = t2;
+    rt2.attackTiles = ComputeAttackTiles(t2, W, H);
+    m_towers.push_back(std::move(rt2));
+  }
 
   // Camera distance based on grid size.
   float gridMax = static_cast<float>(W > H ? W : H);
@@ -363,6 +441,7 @@ void GridGame::LoadFromStageData(const StageData &stage) {
   }
 
   CreateGameEmitters();
+  InitTowers();
   m_state = GridGameState::Playing;
 }
 
@@ -466,11 +545,23 @@ void GridGame::TryMove(int dx, int dy, bool pulling) {
   if (m_map.InBounds(oldX, oldY) &&
       m_map.At(oldX, oldY).type == TileType::Crumble) {
     m_map.DestroyCrumble(oldX, oldY);
+
+    // Phase 8B: crumble debris VFX.
+    XMFLOAT3 cc = m_map.TileCenter(oldX, oldY);
+    auto cpos = XMVectorSet(cc.x, 0.1f, cc.z, 0.0f);
+    SpawnBurst<CrumbleDebrisEmitter>(cpos);
   }
 
   // Phase 6: record trail mark at the tile we left.
   m_trail[m_trailHead] = {oldX, oldY, 0.0f, true};
   m_trailHead = (m_trailHead + 1) % kMaxTrailMarks;
+
+  // Phase 8D: player move sparks at old tile position.
+  {
+    XMFLOAT3 oc = m_map.TileCenter(oldX, oldY);
+    auto opos = XMVectorSet(oc.x, 0.1f, oc.z, 0.0f);
+    SpawnBurst<PlayerMoveSparksEmitter>(opos);
+  }
 
   // Ice slide initiation: if destination is ice, start sliding.
   if (m_map.InBounds(nx, ny) && m_map.At(nx, ny).type == TileType::Ice &&
@@ -490,6 +581,13 @@ void GridGame::TakeDamage(int amount) {
   m_playerHP -= amount;
   m_iFrameTimer = kIFrameDuration;
   m_damageFlashTimer = 0.25f;
+
+  // Phase 8B: damage hit burst VFX at player position.
+  {
+    XMFLOAT3 pc = m_map.TileCenter(m_playerX, m_playerY);
+    auto ppos = XMVectorSet(pc.x, 0.5f, pc.z, 0.0f);
+    SpawnBurst<DamageHitBurstEmitter>(ppos);
+  }
 
   if (m_playerHP <= 0) {
     m_playerHP = 0;
@@ -522,12 +620,20 @@ void GridGame::UpdateHazards(float dt) {
       const float kLightningCycle = 2.0f;
       const float kBurstWindow = 0.3f;
 
+      bool wasActive = t.hazardActive;
       if (t.hazardTimer >= kLightningCycle) {
         t.hazardActive = true;
         if (t.hazardTimer >= kLightningCycle + kBurstWindow) {
           t.hazardActive = false;
           t.hazardTimer = 0.0f;
         }
+      }
+
+      // Phase 8C: lightning strike sparks on activation edge.
+      if (t.hazardActive && !wasActive) {
+        XMFLOAT3 lc = m_map.TileCenter(x, y);
+        auto lpos = XMVectorSet(lc.x, 0.2f, lc.z, 0.0f);
+        SpawnBurst<LightningStrikeSparksEmitter>(lpos);
       }
 
       // Damage player if on this tile during burst.
@@ -545,12 +651,20 @@ void GridGame::UpdateHazards(float dt) {
       if (t.type != TileType::Spike)
         continue;
 
+      bool spikeWasActive = t.hazardActive;
       t.hazardTimer += dt;
       const float kSpikeOn = 1.5f;
       const float kSpikeOff = 1.5f;
       float cycleLen = kSpikeOn + kSpikeOff;
       float phase = fmodf(t.hazardTimer, cycleLen);
       t.hazardActive = (phase < kSpikeOn);
+
+      // Phase 8C: spike trap sparks on activation edge.
+      if (t.hazardActive && !spikeWasActive) {
+        XMFLOAT3 sc = m_map.TileCenter(x, y);
+        auto spos = XMVectorSet(sc.x, 0.1f, sc.z, 0.0f);
+        SpawnBurst<SpikeTrapSparksEmitter>(spos);
+      }
 
       // Damage + stun if player on active spike.
       if (t.hazardActive && m_playerX == x && m_playerY == y &&
@@ -559,6 +673,119 @@ void GridGame::UpdateHazards(float dt) {
         if (!m_stunned) {
           m_stunned = true;
           m_stunTimer = kStunDuration;
+        }
+      }
+    }
+  }
+}
+
+// ---- Phase 3: Tower system ----
+
+void GridGame::InitTowers() {
+  m_towers.clear();
+
+  // Get tower data — from loaded StageData if available, else from test stage.
+  const std::vector<TowerData> *towerSrc = nullptr;
+  int gridW = m_map.Width();
+  int gridH = m_map.Height();
+
+  if (m_hasStageData) {
+    towerSrc = &m_loadedStage.towers;
+  }
+
+  if (!towerSrc || towerSrc->empty())
+    return;
+
+  for (const auto &td : *towerSrc) {
+    RuntimeTower rt;
+    rt.data = td;
+    rt.timer = 0.0f;
+    rt.lastFireCycle = -1;
+    rt.fireFlashTimer = 0.0f;
+    rt.attackTiles = ComputeAttackTiles(td, gridW, gridH);
+    m_towers.push_back(std::move(rt));
+
+    // Phase 8C: tower idle wisp emitter at tower position.
+    XMFLOAT3 tp = GetTowerWorldPos(m_towers.back());
+    auto wpos = XMVectorSet(tp.x, tp.y + 0.3f, tp.z, 0.0f);
+    auto wisp = std::make_unique<TowerIdleWispEmitter>(16, wpos, 3.5, true);
+    m_gameEmitters.push_back(std::move(wisp));
+  }
+}
+
+GridGame::TowerPhase GridGame::GetTowerPhase(const RuntimeTower &t) const {
+  if (t.fireFlashTimer > 0.0f)
+    return TowerPhase::Firing;
+  if (t.timer < t.data.delay)
+    return TowerPhase::Idle;
+  if (t.data.interval < 0.01f)
+    return TowerPhase::Idle; // guard: degenerate interval
+
+  float cycleTime = fmodf(t.timer - t.data.delay, t.data.interval);
+  float timeUntilFire = t.data.interval - cycleTime;
+
+  if (timeUntilFire <= kWarn2LeadTime)
+    return TowerPhase::Warn2;
+  if (timeUntilFire <= kWarn1LeadTime)
+    return TowerPhase::Warn1;
+  return TowerPhase::Idle;
+}
+
+void GridGame::UpdateTowers(float dt) {
+  for (auto &tower : m_towers) {
+    tower.timer += dt;
+
+    // Tick fire flash countdown.
+    if (tower.fireFlashTimer > 0.0f)
+      tower.fireFlashTimer -= dt;
+
+    // Not past initial delay yet, or degenerate interval.
+    if (tower.timer < tower.data.delay || tower.data.interval < 0.01f)
+      continue;
+
+    // Detect fire moment: cycle count incremented.
+    int currentCycle =
+        static_cast<int>((tower.timer - tower.data.delay) / tower.data.interval);
+    if (currentCycle > tower.lastFireCycle) {
+      tower.lastFireCycle = currentCycle;
+      tower.fireFlashTimer = kFireFlashDuration;
+
+      // Phase 8B: tower fire burst VFX at tower position.
+      {
+        XMFLOAT3 tp = GetTowerWorldPos(tower);
+        auto tpos = XMVectorSet(tp.x, tp.y, tp.z, 0.0f);
+        SpawnBurst<TowerFireBurstEmitter>(tpos);
+      }
+
+      // Phase 3C: damage player if on affected tile.
+      for (const auto &[ax, ay] : tower.attackTiles) {
+        if (ax == m_playerX && ay == m_playerY && m_playerLerpT >= 1.0f) {
+          TakeDamage(1);
+          break;
+        }
+      }
+
+      // Phase 8B: beam impact sparks on each attack tile.
+      for (const auto &[ax, ay] : tower.attackTiles) {
+        if (m_map.InBounds(ax, ay)) {
+          XMFLOAT3 tc = m_map.TileCenter(ax, ay);
+          auto spos = XMVectorSet(tc.x, 0.1f, tc.z, 0.0f);
+          SpawnBurst<BeamImpactSparksEmitter>(spos);
+        }
+      }
+
+      // Phase 3C: destroy destructible walls on affected tiles.
+      for (const auto &[ax, ay] : tower.attackTiles) {
+        if (m_map.InBounds(ax, ay)) {
+          Tile &t = m_map.At(ax, ay);
+          if (t.hasWall && t.wallDestructible && !t.wallDestroyed) {
+            m_map.DestroyWall(ax, ay);
+
+            // Phase 8B: wall debris VFX.
+            XMFLOAT3 wc = m_map.TileCenter(ax, ay);
+            auto wpos = XMVectorSet(wc.x, 0.5f, wc.z, 0.0f);
+            SpawnBurst<WallDebrisEmitter>(wpos);
+          }
         }
       }
     }
@@ -703,8 +930,14 @@ void GridGame::UpdatePlaying(float dt, Input &input, FrameData & /*frame*/) {
   for (auto &em : m_gameEmitters)
     em->Update(static_cast<double>(dt));
 
+  // Phase 8A: update burst emitters.
+  UpdateBurstEmitters(dt);
+
   // --- Tick hazard timers ---
   UpdateHazards(dt);
+
+  // --- Tick tower timers (Phase 3) ---
+  UpdateTowers(dt);
 
   // --- Tick i-frame timer ---
   if (m_iFrameTimer > 0.0f)
@@ -1190,6 +1423,124 @@ void GridGame::BuildScene(FrameData &frame) {
     }
   }
 
+  // Phase 3: render towers and telegraph tiles.
+  if (m_state == GridGameState::Playing || m_state == GridGameState::Paused ||
+      m_state == GridGameState::StageComplete) {
+    for (const auto &tower : m_towers) {
+      TowerPhase phase = GetTowerPhase(tower);
+
+      // Tower cone body at perimeter position.
+      // Position towers just outside the grid edge based on side.
+      float towerX = static_cast<float>(tower.data.x);
+      float towerZ = static_cast<float>(tower.data.y);
+      switch (tower.data.side) {
+      case TowerSide::Left:   towerX = -1.0f; break;
+      case TowerSide::Right:  towerX = static_cast<float>(m_map.Width()); break;
+      case TowerSide::Top:    towerZ = -1.0f; break;
+      case TowerSide::Bottom: towerZ = static_cast<float>(m_map.Height()); break;
+      }
+
+      // Idle breathing: subtle scale pulse. Firing: expand briefly.
+      float towerScale = 0.5f;
+      if (phase == TowerPhase::Firing) {
+        towerScale = 0.65f;
+      } else if (phase == TowerPhase::Warn2) {
+        towerScale = 0.5f + 0.05f * sinf(m_stageTimer * 10.0f * 3.14159f);
+      } else {
+        // Idle pulse: gentle breathing.
+        towerScale = 0.5f + 0.02f * sinf(m_stageTimer * 2.0f * 3.14159f);
+      }
+
+      XMMATRIX towerWorld =
+          XMMatrixScaling(towerScale, towerScale, towerScale) *
+          XMMatrixTranslation(towerX, 0.8f, towerZ);
+      frame.opaqueItems.push_back({m_towerMeshId, towerWorld});
+
+      // Tower point light (pulses brighter when firing).
+      GPUPointLight towerLight{};
+      towerLight.position = {towerX, 1.2f, towerZ};
+      towerLight.color = {1.0f, 0.2f, 0.1f};
+      if (phase == TowerPhase::Firing) {
+        towerLight.range = 4.0f;
+        towerLight.intensity = 3.0f;
+      } else if (phase == TowerPhase::Warn2) {
+        float pulse = 1.0f + 0.5f * sinf(m_stageTimer * 12.0f * 3.14159f);
+        towerLight.range = 2.5f;
+        towerLight.intensity = 1.2f * pulse;
+      } else if (phase == TowerPhase::Warn1) {
+        towerLight.range = 1.5f;
+        towerLight.intensity = 0.6f;
+      } else {
+        towerLight.range = 1.5f;
+        towerLight.intensity = 0.3f;
+      }
+      frame.pointLights.push_back(towerLight);
+
+      // Telegraph tiles — only render during warning/firing phases.
+      if (phase == TowerPhase::Idle)
+        continue;
+
+      uint32_t telegraphMesh = m_telegraphWarn1MeshId;
+      float telegraphY = 0.05f;
+      float telegraphScale = 0.85f;
+
+      if (phase == TowerPhase::Warn2) {
+        telegraphMesh = m_telegraphWarn2MeshId;
+        // Pulse scale for urgency.
+        float pulse = 0.85f + 0.1f * sinf(m_stageTimer * 10.0f * 3.14159f);
+        telegraphScale = pulse;
+        telegraphY = 0.07f;
+      } else if (phase == TowerPhase::Firing) {
+        telegraphMesh = m_telegraphFireMeshId;
+        telegraphScale = 0.95f;
+        telegraphY = 0.09f;
+      }
+
+      for (const auto &[ax, ay] : tower.attackTiles) {
+        if (!m_map.InBounds(ax, ay))
+          continue;
+
+        XMFLOAT3 tc = m_map.TileCenter(ax, ay);
+        XMMATRIX w = XMMatrixScaling(telegraphScale, 1.0f, telegraphScale) *
+                     XMMatrixTranslation(tc.x, telegraphY, tc.z);
+        frame.opaqueItems.push_back({telegraphMesh, w});
+      }
+
+      // Phase 3B: beam laser during firing.
+      if (phase == TowerPhase::Firing && m_beamMeshId != UINT32_MAX) {
+        // Beam fades over flash duration: thick at start, thin at end.
+        float beamLife = tower.fireFlashTimer / kFireFlashDuration;
+        float beamThickness = 0.08f * beamLife;
+        float beamHeight = 0.5f;
+
+        // Determine beam direction and length based on tower side.
+        bool horizontal =
+            (tower.data.side == TowerSide::Left ||
+             tower.data.side == TowerSide::Right);
+
+        if (horizontal) {
+          // Beam stretches across the full grid width along X.
+          float beamLen = static_cast<float>(m_map.Width());
+          float cx = static_cast<float>(m_map.Width()) * 0.5f - 0.5f;
+          float cz = static_cast<float>(tower.data.y);
+          XMMATRIX bw =
+              XMMatrixScaling(beamLen, beamThickness, beamThickness) *
+              XMMatrixTranslation(cx, beamHeight, cz);
+          frame.opaqueItems.push_back({m_beamMeshId, bw});
+        } else {
+          // Beam stretches across the full grid height along Z.
+          float beamLen = static_cast<float>(m_map.Height());
+          float cx = static_cast<float>(tower.data.x);
+          float cz = static_cast<float>(m_map.Height()) * 0.5f - 0.5f;
+          XMMATRIX bw =
+              XMMatrixScaling(beamThickness, beamThickness, beamLen) *
+              XMMatrixTranslation(cx, beamHeight, cz);
+          frame.opaqueItems.push_back({m_beamMeshId, bw});
+        }
+      }
+    }
+  }
+
   // Render player and cargo during gameplay.
   if (m_state == GridGameState::Playing || m_state == GridGameState::Paused ||
       m_state == GridGameState::StageComplete) {
@@ -1242,6 +1593,10 @@ void GridGame::BuildScene(FrameData &frame) {
 
     // Phase 6: push game particle emitters into frame.
     for (auto &em : m_gameEmitters)
+      frame.emitters.push_back(em.get());
+
+    // Phase 8A: push burst emitters into frame.
+    for (auto &em : m_burstEmitters)
       frame.emitters.push_back(em.get());
   }
 
