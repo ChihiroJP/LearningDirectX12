@@ -141,6 +141,21 @@ Both `shaders/gbuffer.hlsl` and `shaders/mesh.hlsl`:
 
 ---
 
+## Bug Fix — HLSL Reserved Keyword Crash
+
+**Symptom:** Application crashed on startup with a Windows error dialog (`MessageBoxA`). The C++ build succeeded (0 errors), but the HLSL shaders are compiled at runtime via `D3DCompileFromFile`, so the shader error only appeared at launch.
+
+**Root cause:** In `procedural_tiles.hlsli` line 103, the voronoi function used `point` as a variable name. `point` is a **reserved keyword** in HLSL (geometry shader primitive topology type). The shader compiler (`fxc /T ps_5_1`) rejected it with:
+```
+procedural_tiles.hlsli(103,20-24): error X3000: syntax error: unexpected token 'point'
+```
+
+**Fix:** Renamed `point` → `pt` in the voronoi function.
+
+**Lesson:** HLSL reserved keywords include geometry/tessellation primitive types (`point`, `line`, `triangle`, `lineadj`, `triangleadj`). These are easy to miss since they compile fine in C++ and aren't flagged by IDE syntax highlighting. Always test shader compilation separately from C++ build, or add an offline FXC compile step to the build.
+
+---
+
 ## Performance Notes
 
 - Procedural math is lightweight per-pixel: value noise is ~10 ALU ops, FBM(4 octaves) ~40 ALU, voronoi ~45 ALU

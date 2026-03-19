@@ -402,6 +402,7 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int nCmdShow) {
       float b = 0.2f + 0.2f * (0.5f + 0.5f * sinf(t * 0.9f));
 
       auto &input = window.GetInput();
+      input.PollGamepad();
 
       // ---- F5: toggle Editor / Game / Scene-Play mode (Milestone 4 + Phase 8) ----
       {
@@ -491,12 +492,12 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int nCmdShow) {
       const bool uiWantsMouse = imgui.WantCaptureMouse();
 
       // Camera input routing — mode-dependent (Phase 6).
-      const bool isPlaying = (appMode == AppMode::Game && gridGame.GetState() == GridGameState::Playing);
+      const bool isPlaying = (appMode == AppMode::Game &&
+          (gridGame.GetState() == GridGameState::Playing || gridGame.GetState() == GridGameState::Intro));
 
-      // Always consume scroll to prevent accumulation.
-      float scroll = input.ConsumeScrollDelta();
-
+      // Consume scroll here only when not playing — GridGame handles its own scroll.
       if (!isPlaying) {
+        float scroll = input.ConsumeScrollDelta();
         auto md = input.ConsumeMouseDelta();
 
         switch (cam.Mode()) {
@@ -760,7 +761,8 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int nCmdShow) {
       frame.particlesEnabled = true;
       // Demo emitters only outside gameplay
       if (appMode == AppMode::Editor || (gridGame.GetState() != GridGameState::Playing &&
-          gridGame.GetState() != GridGameState::Paused)) {
+          gridGame.GetState() != GridGameState::Paused &&
+          gridGame.GetState() != GridGameState::Intro)) {
         if (particlesEnabled && fireEnabled)
           frame.emitters.push_back(&fireEmitter);
         if (particlesEnabled && smokeEnabled)

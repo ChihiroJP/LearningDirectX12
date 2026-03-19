@@ -7,7 +7,8 @@ A **DirectX 12 game project** featuring a custom rendering engine with modern gr
 A **tactical cargo-push puzzle game** on a danger grid with a **cyber/neon aesthetic**.
 
 - **Objective**: Push a cargo cube from the left edge to the right edge of a grid
-- **Movement**: WASD to push cargo (player walks into cargo to push it), E + WASD to pull cargo (player pulls cargo toward themselves, solves wall-stuck situations)
+- **Movement**: WASD to push cargo (player walks into cargo to push it), E + WASD to pull cargo (player pulls cargo toward themselves, solves wall-stuck situations). Xbox controller supported (left stick + A button)
+- **Cargo Drop-Off**: Push cargo off the grid edge and it falls off the stage — stage fail
 - **Danger**: Towers around the grid perimeter fire patterned attacks (row sweeps, column strikes, area blasts, tracking shots) with telegraphed warnings on affected tiles
 - **Puzzle**: Some paths are blocked by walls that can only be destroyed by baiting tower attacks onto them
 - **Hazards**: Fire (DOT), lightning (periodic burst), spike traps (damage + stun), ice (slow), crumbling tiles (break after stepping)
@@ -26,6 +27,8 @@ A **tactical cargo-push puzzle game** on a danger grid with a **cyber/neon aesth
 - Multiple point/spot lights (32 each, deferred)
 - Dear ImGui debug UI
 - Resolution support (fullscreen, borderless, windowed at 720p/1080p/1440p/4K)
+- TPS camera with smooth follow, wall collision auto-zoom, screen shake on damage
+- Xbox controller support (XInput)
 
 ### Requirements
 - Windows 10/11
@@ -106,6 +109,20 @@ notes/                  Learning notes / architecture docs
 - ✅ **Phase 6 — Camera System**: Switchable camera modes (free-fly, orbit, game camera), viewport controls, camera presets, FOV/near/far adjustment
 - ✅ **Phase 7 — Asset Browser & Inspector**: File browser for meshes/textures/scenes, texture preview thumbnails, drag-and-drop asset assignment to inspector slots
 - ✅ **Phase 8 — Play Mode & Hot Reload**: Editor ↔ play mode toggle (F5 scene snapshot/restore), shader hot reload (F9 recompile all PSOs), scene state save/restore on play/stop
+
+### Milestone 5: Advanced Rendering & Engine
+- ✅ **Phase 1 — Game Asset Upgrade**: PBR textures for floor/wall tiles, VRM character model for player, GLB/VRM binary loader, uint32 index buffers, multi-mesh merging
+- 🔧 **Phase 2 — Skeletal Animation**: glTF skinning, bone transforms, animation playback (player model)
+  - ✅ **2A — Data Structures & Extraction**: MeshVertex bone data (indices+weights), Skeleton/Bone/AnimationClip structs, glTF skin+animation parsing, GPU vertex layout updated
+  - ✅ **2B+2C — CPU Animation Player + GPU Skinning**: BonePalette upload via StructuredBuffer, root sig expansion (forward/gbuffer/shadow), VS bone blending with weight normalization, procedural idle (breathing bob), kMaxBones 128→256 (VRM spring bone support), bone index OOB fix
+  - 🔧 **2D — Animation Playback**: Walk, run, push, pull, idle animations from glTF clips, animation state machine, blend transitions
+- ⬚ **Phase 3 — Compute Shader Pipeline**: General compute infrastructure (dispatch, UAV, readback)
+- ⬚ **Phase 4 — GPU-Driven Particles**: Compute spawn/simulate/sort/draw, replace CPU particles
+- ⬚ **Phase 5 — GPU Frustum Culling**: Compute cull + indirect draw (ExecuteIndirect)
+- ⬚ **Phase 6 — Screen-Space Reflections**: Depth buffer ray-march, deferred integration
+- ⬚ **Phase 7 — Volumetric Lighting**: Raymarched scattering from directional + point lights
+- ⬚ **Phase 8 — Render Graph**: Automatic resource transitions, pass dependencies, barrier batching
+- ⬚ **Phase 9 — Multi-threaded Command Recording**: Parallel command list recording across threads
 
 ### Final
 - **Portfolio demo polish**: capture-ready presentation

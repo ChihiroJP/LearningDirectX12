@@ -10,8 +10,9 @@
 enum class GridGameState : uint8_t {
   MainMenu      = 0,
   StageSelect   = 1,
-  Playing       = 2,
-  Paused        = 3,
-  StageComplete = 4,
-  StageFail     = 5,
+  Intro         = 2,  // cinematic camera pan to goal before gameplay
+  Playing       = 3,
+  Paused        = 4,
+  StageComplete = 5,
+  StageFail     = 6,
 };

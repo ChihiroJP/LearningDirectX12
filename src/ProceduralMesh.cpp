@@ -30,11 +30,13 @@ static void PushVert(LoadedMesh &m, float px, float py, float pz, float nx,
   vtx.tangent[1] = ty;
   vtx.tangent[2] = tz;
   vtx.tangent[3] = tw;
+  vtx.boneIndices[0] = vtx.boneIndices[1] = vtx.boneIndices[2] = vtx.boneIndices[3] = 0;
+  vtx.boneWeights[0] = vtx.boneWeights[1] = vtx.boneWeights[2] = vtx.boneWeights[3] = 0.0f;
   m.vertices.push_back(vtx);
 }
 
-// Helper: push a triangle (3 uint16_t indices).
-static void PushTri(LoadedMesh &m, uint16_t a, uint16_t b, uint16_t c) {
+// Helper: push a triangle (3 uint32_t indices).
+static void PushTri(LoadedMesh &m, uint32_t a, uint32_t b, uint32_t c) {
   m.indices.push_back(a);
   m.indices.push_back(b);
   m.indices.push_back(c);
@@ -75,7 +77,7 @@ LoadedMesh CreateCube(float size) {
 
   for (int f = 0; f < 6; ++f) {
     auto &fd = faces[f];
-    auto base = static_cast<uint16_t>(m.vertices.size());
+    auto base = static_cast<uint32_t>(m.vertices.size());
     for (int v = 0; v < 4; ++v) {
       PushVert(m, fd.p[v][0], fd.p[v][1], fd.p[v][2], fd.nx, fd.ny, fd.nz,
                uvs[v][0], uvs[v][1], fd.tx, fd.ty, fd.tz, 1.0f);
@@ -132,14 +134,14 @@ LoadedMesh CreateCylinder(float radius, float height, uint32_t segments) {
 
   // Side indices (CW winding for DX front-face).
   for (uint32_t i = 0; i < segments; ++i) {
-    auto b = static_cast<uint16_t>(i * 2);
+    auto b = static_cast<uint32_t>(i * 2);
     PushTri(m, b, b + 3, b + 2);
     PushTri(m, b, b + 1, b + 3);
   }
 
   // Top cap (CW when viewed from above).
   {
-    auto centerIdx = static_cast<uint16_t>(m.vertices.size());
+    auto centerIdx = static_cast<uint32_t>(m.vertices.size());
     PushVert(m, 0, halfH, 0, 0, 1, 0, 0.5f, 0.5f, 1, 0, 0, 1);
     for (uint32_t i = 0; i <= segments; ++i) {
       float angle =
@@ -151,14 +153,14 @@ LoadedMesh CreateCylinder(float radius, float height, uint32_t segments) {
                cx * 0.5f + 0.5f, cz * 0.5f + 0.5f, 1, 0, 0, 1);
     }
     for (uint32_t i = 0; i < segments; ++i) {
-      PushTri(m, centerIdx, static_cast<uint16_t>(centerIdx + 2 + i),
-              static_cast<uint16_t>(centerIdx + 1 + i));
+      PushTri(m, centerIdx, static_cast<uint32_t>(centerIdx + 2 + i),
+              static_cast<uint32_t>(centerIdx + 1 + i));
     }
   }
 
   // Bottom cap (CW when viewed from below).
   {
-    auto centerIdx = static_cast<uint16_t>(m.vertices.size());
+    auto centerIdx = static_cast<uint32_t>(m.vertices.size());
     PushVert(m, 0, -halfH, 0, 0, -1, 0, 0.5f, 0.5f, 1, 0, 0, 1);
     for (uint32_t i = 0; i <= segments; ++i) {
       float angle =
@@ -170,8 +172,8 @@ LoadedMesh CreateCylinder(float radius, float height, uint32_t segments) {
                cx * 0.5f + 0.5f, cz * 0.5f + 0.5f, 1, 0, 0, 1);
     }
     for (uint32_t i = 0; i < segments; ++i) {
-      PushTri(m, centerIdx, static_cast<uint16_t>(centerIdx + 1 + i),
-              static_cast<uint16_t>(centerIdx + 2 + i));
+      PushTri(m, centerIdx, static_cast<uint32_t>(centerIdx + 1 + i),
+              static_cast<uint32_t>(centerIdx + 2 + i));
     }
   }
 
@@ -208,7 +210,7 @@ LoadedMesh CreateCone(float radius, float height, uint32_t segments) {
     float tx = -sinf(midA);
     float tz = cosf(midA);
 
-    auto base = static_cast<uint16_t>(m.vertices.size());
+    auto base = static_cast<uint32_t>(m.vertices.size());
 
     // Tip
     PushVert(m, 0, height, 0, nx, ny, nz, 0.5f, 0.0f, tx, 0, tz, 1.0f);
@@ -226,7 +228,7 @@ LoadedMesh CreateCone(float radius, float height, uint32_t segments) {
 
   // Bottom cap (CW when viewed from below).
   {
-    auto centerIdx = static_cast<uint16_t>(m.vertices.size());
+    auto centerIdx = static_cast<uint32_t>(m.vertices.size());
     PushVert(m, 0, 0, 0, 0, -1, 0, 0.5f, 0.5f, 1, 0, 0, 1);
     for (uint32_t i = 0; i <= segments; ++i) {
       float angle =
@@ -238,8 +240,8 @@ LoadedMesh CreateCone(float radius, float height, uint32_t segments) {
                cz * 0.5f + 0.5f, 1, 0, 0, 1);
     }
     for (uint32_t i = 0; i < segments; ++i) {
-      PushTri(m, centerIdx, static_cast<uint16_t>(centerIdx + 1 + i),
-              static_cast<uint16_t>(centerIdx + 2 + i));
+      PushTri(m, centerIdx, static_cast<uint32_t>(centerIdx + 1 + i),
+              static_cast<uint32_t>(centerIdx + 2 + i));
     }
   }
 
@@ -284,10 +286,10 @@ LoadedMesh CreateSphere(float radius, uint32_t rings, uint32_t segments) {
   uint32_t cols = segments + 1;
   for (uint32_t r = 0; r < rings; ++r) {
     for (uint32_t s = 0; s < segments; ++s) {
-      auto tl = static_cast<uint16_t>(r * cols + s);
-      auto tr = static_cast<uint16_t>(r * cols + s + 1);
-      auto bl = static_cast<uint16_t>((r + 1) * cols + s);
-      auto br = static_cast<uint16_t>((r + 1) * cols + s + 1);
+      auto tl = static_cast<uint32_t>(r * cols + s);
+      auto tr = static_cast<uint32_t>(r * cols + s + 1);
+      auto bl = static_cast<uint32_t>((r + 1) * cols + s);
+      auto br = static_cast<uint32_t>((r + 1) * cols + s + 1);
 
       PushTri(m, tl, tr, bl);
       PushTri(m, tr, br, bl);

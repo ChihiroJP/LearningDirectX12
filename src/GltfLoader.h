@@ -1,6 +1,7 @@
 #pragma once
 #include "DxUtil.h"
 #include "Lighting.h" // Material struct
+#include <DirectXMath.h>
 #include <d3d12.h>
 #include <string>
 #include <vector>
@@ -15,11 +16,50 @@ struct MeshVertex {
   float normal[3];
   float uv[2];
   float tangent[4]; // xyz = tangent direction, w = handedness (+/-1)
+  uint16_t boneIndices[4]; // up to 65535 bones (128 typical)
+  float boneWeights[4];
+};
+
+// Skeleton bone: one entry per joint in the skin.
+struct Bone {
+  std::string name;
+  int parentIndex = -1; // -1 = root
+  DirectX::XMFLOAT4X4 inverseBindMatrix;
+  DirectX::XMFLOAT4X4 localTransform; // default local transform from node
+};
+
+struct Skeleton {
+  std::vector<Bone> bones;
+  std::vector<int> jointNodeIndices; // glTF node index for each bone
+};
+
+// Animation keyframe (translation, rotation, or scale at a point in time).
+struct AnimKeyframe {
+  float time;
+  DirectX::XMFLOAT4 value; // TRS: xyz(+w for quat)
+};
+
+// One channel targeting a single bone's T, R, or S.
+enum class AnimTargetPath { Translation, Rotation, Scale };
+
+struct AnimTrack {
+  int boneIndex; // index into Skeleton::bones
+  AnimTargetPath path;
+  std::vector<AnimKeyframe> keyframes;
+};
+
+struct AnimationClip {
+  std::string name;
+  float duration = 0.0f;
+  std::vector<AnimTrack> tracks;
 };
 
 struct LoadedMesh {
   std::vector<MeshVertex> vertices;
-  std::vector<uint16_t> indices;
+  std::vector<uint32_t> indices;
+  Skeleton skeleton;
+  std::vector<AnimationClip> animations;
+  bool hasSkeleton = false;
 };
 
 struct LoadedImage {
@@ -42,6 +82,13 @@ struct MaterialImages {
 
 // Load any image file (PNG/JPG/BMP/TGA) into a LoadedImage via stb_image.
 bool LoadImageFile(const std::string &path, LoadedImage &outImage);
+
+// Load animation clips from a standalone GLB/glTF file (e.g. Mixamo export).
+// Extracts animations and remaps bone names from Mixamo convention to target skeleton.
+// Returns the clips with boneIndex values referring to the target skeleton's bones.
+bool LoadAnimationFile(const std::string &path,
+                       const Skeleton &targetSkeleton,
+                       std::vector<AnimationClip> &outClips);
 
 class GltfLoader {
 public:
@@ -81,6 +128,9 @@ public:
   }
 
 private:
+  void ExtractSkeleton(const tinygltf::Model &model);
+  void ExtractAnimations(const tinygltf::Model &model);
+
   LoadedMesh m_mesh;
   LoadedImage m_baseColorImage;
   LoadedImage m_normalImage;

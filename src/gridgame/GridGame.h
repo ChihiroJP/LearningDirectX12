@@ -12,6 +12,7 @@
 #include "GridMap.h"
 #include "StageData.h"
 
+#include "../AnimationPlayer.h"
 #include "../Camera.h"
 #include "../Input.h"
 #include "../RenderPass.h"
@@ -47,6 +48,7 @@ private:
   // State machine handlers.
   void UpdateMainMenu(FrameData &frame);
   void UpdateStageSelect(FrameData &frame);
+  void UpdateIntro(float dt, Input &input, FrameData &frame);
   void UpdatePlaying(float dt, Input &input, FrameData &frame);
   void UpdatePaused(FrameData &frame);
   void UpdateStageComplete(FrameData &frame);
@@ -78,6 +80,38 @@ private:
 
   // Camera (non-owning).
   Camera *m_camera = nullptr;
+  DxContext *m_dx = nullptr; // for SetBonePalette each frame
+
+  // Skeletal animation (Phase 2B/2C/2D).
+  Skeleton m_playerSkeleton;
+  bool m_playerHasSkeleton = false;
+  float m_animTime = 0.0f;
+  std::vector<AnimationClip> m_playerAnimations;  // loaded from external GLB files
+  int m_idleClipIndex = -1;  // index into m_playerAnimations (-1 = none)
+  int m_pushClipIndex = -1;  // push/move animation clip index
+  int m_runClipIndex  = -1;  // run animation clip index
+  float m_pushAnimTime = 0.0f;  // separate time accumulator for push clip
+  float m_runAnimTime  = 0.0f;  // separate time accumulator for run clip
+  float m_pushLingerTimer = 0.0f; // seconds remaining for push anim after last cargo interaction
+  float m_moveLingerTimer = 0.0f; // brief linger to smooth run→idle transition
+  static constexpr float kPushLingerDuration = 1.0f; // push anim plays for 1s after interaction
+  static constexpr float kMoveLingerDuration = 0.2f; // run anim lingers briefly after stop
+  bool m_lastMoveWasCargoInteraction = false; // set by TryMove when push/pull actually moves cargo
+
+  // Crossfade animation system (supports idle/run/push transitions).
+  int m_animActiveClip = -1;    // clip index currently blending toward
+  int m_animPrevClip   = -1;    // clip index blending from (-1 = none)
+  float m_animTransition = 1.0f; // 0 = fully prev, 1 = fully active
+  static constexpr float kAnimBlendSpeed = 8.0f; // crossfade speed (~0.125s)
+
+  // Cargo drop-off (pushed off grid edge).
+  bool m_cargoDropping = false;          // cargo is falling off the stage
+  float m_cargoDropTimer = 0.0f;         // animation progress (0 → kCargoDropDuration)
+  int m_cargoDropDx = 0, m_cargoDropDy = 0; // push direction that caused the drop
+  DirectX::XMFLOAT3 m_cargoDropFrom = {};   // visual position when drop started
+  static constexpr float kCargoDropDuration = 0.8f; // seconds for drop animation
+  static constexpr float kCargoDropFallDepth = 5.0f; // how far cargo falls in Y
+  static constexpr float kCargoDropSlideDistance = 2.0f; // how far cargo slides off edge
 
   // Grid.
   GridMap m_map;
@@ -128,9 +162,24 @@ private:
   float m_cameraPitch     = 0.7f;   // radians (elevation angle)
   float m_cameraDistance   = 20.0f;  // from grid center
 
-  static constexpr float kCamDistMin = 5.0f;
-  static constexpr float kCamDistMax = 60.0f;
+  static constexpr float kCamDistMin = 0.5f;
+  static constexpr float kCamDistMax = 200.0f;
   static constexpr float kCamZoomSpeed = 2.0f;
+
+  // TPS (third-person) camera.
+  float m_playerFacingYaw = 0.0f;          // target direction player faces (radians, 0 = +Z)
+  float m_playerVisualYaw = 0.0f;          // smoothed visual yaw for rendering
+  float m_tpsCamYaw       = 0.0f;          // smoothed camera yaw following player facing
+  float m_tpsCamPitch     = 0.55f;         // elevation angle above player (radians)
+  float m_tpsCamDist      = 6.0f;          // desired distance behind player
+  float m_tpsCamActualDist = 6.0f;         // actual distance (may be shortened by collision)
+  float m_tpsCamHeight    = 2.5f;          // extra height offset above shoulder
+  static constexpr float kTpsCamSmoothSpeed = 3.5f;   // camera yaw interpolation speed
+  static constexpr float kPlayerTurnSpeed   = 12.0f;  // player model rotation speed
+  static constexpr float kCamCollisionSpeed = 10.0f;   // zoom in/out speed for collision
+  static constexpr float kCamCollisionMinDist = 1.5f;  // minimum distance when colliding
+  static constexpr float kTpsCamDistMin = 2.0f;
+  static constexpr float kTpsCamDistMax = 20.0f;
 
   // Stage tracking.
   bool m_hasStageData = false;    // true when loaded from editor StageData
@@ -190,6 +239,55 @@ private:
     auto em = std::make_unique<T>(position, std::forward<Args>(args)...);
     m_burstEmitters.push_back(std::move(em));
   }
+
+  // Intro camera cinematic (pan to goal and back).
+  float m_introTimer = 0.0f;        // total elapsed time in intro
+  DirectX::XMFLOAT3 m_goalWorldPos = {};  // goal tile world position (computed on stage load)
+  // Intro phases: 0→hold on player, 1→pan to goal, 2→hold on goal, 3→pan back to player
+  static constexpr float kIntroHoldPlayer   = 0.5f;  // seconds: hold on player at start
+  static constexpr float kIntroPanToGoal    = 1.2f;  // seconds: smooth pan to goal
+  static constexpr float kIntroHoldGoal     = 0.8f;  // seconds: hold on goal
+  static constexpr float kIntroPanBack      = 1.0f;  // seconds: smooth pan back to player
+  // Total intro duration = sum of above
+
+  // Camera mode: TPS vs Top-Down toggle.
+  bool m_topDownMode = false;          // true = top-down, false = TPS
+  float m_topDownBlend = 0.0f;         // 0 = full TPS, 1 = full top-down (smooth lerp)
+  bool m_prevCamToggle = false;        // edge detection for R key / B button
+  static constexpr float kCamTransitionSpeed = 3.0f;  // blend speed (seconds to full transition ~0.33s)
+  static constexpr float kTopDownHeight = 18.0f;       // base height for top-down camera
+  static constexpr float kTopDownPitch  = 1.48f;       // near-vertical look-down (radians, ~85 degrees)
+
+  // Hazard beam system: periodic row/column beams.
+  struct HazardBeam {
+    bool isRow;         // true = row beam, false = column beam
+    int index;          // row or column index
+    float timer;        // time since spawn (0 → kBeamWarnTime → kBeamLifetime)
+    bool damaged;       // true after damage has been applied
+  };
+  std::vector<HazardBeam> m_hazardBeams;
+  float m_hazardBeamSpawnTimer = 0.0f;       // counts up, spawns at kBeamSpawnInterval
+  static constexpr float kBeamSpawnInterval = 5.0f;   // seconds between beam spawns
+  static constexpr float kBeamWarnTime      = 1.5f;   // seconds before damage
+  static constexpr float kBeamLifetime      = 2.5f;   // total beam lifetime (warn + linger)
+  static constexpr float kBeamMinRadius     = 0.02f;  // starting radius (thin)
+  static constexpr float kBeamMaxRadius     = 0.25f;  // max radius at damage time
+  static constexpr float kBeamFloatHeight   = 0.4f;   // Y position above tiles
+  static constexpr int   kBeamsPerSpawn     = 2;       // how many beams per spawn event
+  uint32_t m_hazardBeamMeshId = UINT32_MAX;            // separate mesh for hazard beams
+
+  void UpdateHazardBeams(float dt);
+  void SpawnHazardBeams();
+
+  // Screen shake (triggered on damage).
+  float m_shakeTimer = 0.0f;          // remaining shake time
+  float m_shakeIntensity = 0.0f;      // current shake strength
+  static constexpr float kShakeDuration  = 0.3f;  // seconds
+  static constexpr float kShakeStrength  = 0.15f;  // max offset in world units
+  static constexpr float kShakeFrequency = 35.0f;  // oscillation Hz
+
+  // Frame delta time (cached for BuildScene camera collision smoothing).
+  float m_dt = 0.0f;
 
   // Phase 7: UI animation timer (accumulated, drives sin/cos pulses).
   float m_uiTimer = 0.0f;

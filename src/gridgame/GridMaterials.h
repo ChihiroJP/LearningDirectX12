@@ -184,6 +184,17 @@ static inline Material MakeBeamMaterial() {
   return m;
 }
 
+// ---- Hazard beam material (purple/magenta, distinct from tower beams) ----
+
+static inline Material MakeHazardBeamMaterial() {
+  Material m;
+  m.baseColorFactor = {0.8f, 0.2f, 1.0f, 1.0f};
+  m.emissiveFactor = {4.0f, 0.5f, 6.0f};
+  m.metallicFactor = 0.0f;
+  m.roughnessFactor = 1.0f;
+  return m;
+}
+
 // ---- Grid edge line material (neon grid) ----
 
 static inline Material MakeGridLineMaterial() {

@@ -90,6 +90,8 @@ add_executable(DX12Tutorial12 WIN32
     src/MeshRenderer.cpp
     src/GltfLoader.h
     src/GltfLoader.cpp
+    src/AnimationPlayer.h
+    src/AnimationPlayer.cpp
     src/particle.h
     src/particle.cpp
     src/particle_test.h
@@ -152,6 +154,7 @@ target_link_libraries(DX12Tutorial12 PRIVATE
     dxgi
     d3dcompiler
     dbghelp
+    xinput
     imgui
     tinyexr
     tinygltf

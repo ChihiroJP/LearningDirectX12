@@ -6,6 +6,7 @@
 
 #pragma once
 
+#include "AnimationPlayer.h"
 #include "GltfLoader.h"
 #include "Lighting.h"
 #include "ShadowMap.h"
@@ -86,6 +87,9 @@ public:
                          const DirectX::XMMATRIX &proj,
                          const DirectX::XMFLOAT4 &color);
 
+  // Set bone palette for a skinned mesh (call each frame before rendering).
+  void SetBonePalette(uint32_t meshId, const BonePalette &palette);
+
   // Hot-reload all shaders, recreate PSOs. Returns empty on success, error string on failure.
   std::string ReloadShaders(DxContext &dx);
 
@@ -149,6 +153,9 @@ private:
     // Cached ImGui SRV handles for texture thumbnails (Phase 2 material editor).
     D3D12_GPU_DESCRIPTOR_HANDLE matTexImGuiGpu[6] = {};
     bool matTexImGuiAllocated[6] = {};
+
+    // Skeletal animation bone palette (Phase 2B/2C).
+    BonePalette bonePalette;
   };
 
   std::vector<MeshGpuResources> m_meshes;

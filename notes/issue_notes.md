@@ -157,3 +157,87 @@ params[0].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL; // ✅ FIX
 
 ### Status
 *   [x] Fixed
+
+---
+
+## [2026-03-05] Startup Crash — HLSL Reserved Keyword `point` in Procedural Tile Shader
+
+### Symptoms
+* Application crashed on startup with a Windows error sound and `MessageBoxA` dialog.
+* C++ build succeeded with 0 errors, 0 warnings — no compile-time indication of the problem.
+
+### Root Cause
+Phase 9 added `shaders/procedural_tiles.hlsli` with a voronoi noise function. Line 103 used `point` as a local variable name:
+
+```hlsl
+float2 point = hash22(n + neighbor);  // ❌ ‘point’ is reserved
+float2 diff = neighbor + point - f;
+```
+
+`point` is a **reserved keyword** in HLSL — it’s a geometry shader primitive topology type. The FXC compiler rejected it:
+
+```
+procedural_tiles.hlsli(103,20-24): error X3000: syntax error: unexpected token ‘point’
+```
+
+Since HLSL shaders are compiled at runtime via `D3DCompileFromFile` (not at C++ build time), the error only surfaced when the app launched. `CompileShaderLocal` threw a `std::runtime_error` with the compiler output, caught by `wWinMain`’s try-catch, which displayed the error via `MessageBoxA`.
+
+### Fix
+Renamed `point` → `pt` in the voronoi function in `procedural_tiles.hlsli`.
+
+### Lesson
+* HLSL reserved keywords include geometry/tessellation primitive types: `point`, `line`, `triangle`, `lineadj`, `triangleadj`. These compile fine in C++ and are not flagged by IDE syntax highlighting.
+* Runtime shader compilation means shader bugs bypass the C++ build entirely. Consider adding an offline FXC compile step to CMake to catch these at build time.
+
+### Status
+*   [x] Fixed
+
+---
+
+## [2026-03-09] Stage Load Crash — Per-Frame Constant Buffer Overflow
+
+### Symptoms
+* Loading a large stage (16×18 grid) from JSON in the editor, then play-testing (F5), caused an immediate crash with a Windows error sound.
+* The default test stage (12×10) worked but was near the budget limit.
+
+### Root Cause
+`kFrameConstantsBytes` was **256KB** (`DxContext.cpp:22`). Every instanced draw batch uploads a **16,384-byte bone palette** (256 bones × 64 bytes per `XMFLOAT4X4`) via `AllocFrameConstants`, even for non-skinned meshes (filled with identity matrices).
+
+A 16×18 stage generates **15+ unique mesh batches** in the G-buffer pass alone (tile types, borders, grid lines, player, cargo, towers). Each batch consumes ~16,896 bytes minimum (256 CB + 256 instance data + 16,384 bones), totaling ~270KB+ — exceeding the 256KB budget.
+
+`AllocFrameConstants` threw `std::runtime_error("AllocFrameConstants: out of per-frame constants")`, which surfaced as an unhandled exception crash with Windows error sound.
+
+### Fix
+Increased `kFrameConstantsBytes` from **256KB to 2MB** in `src/DxContext.cpp:22`.
+
+### Future Optimization
+* Skip bone palette upload for non-skinned meshes (check `mesh.bonePalette.boneCount == 0`).
+* Share a single identity bone palette buffer across all non-skinned batches instead of uploading 16KB of identity matrices per batch.
+
+### Status
+*   [x] Fixed
+
+---
+
+## [2026-03-09] Push Animation Only Played While Holding WASD
+
+### Symptoms
+* Push animation only played while WASD keys were held down.
+* Releasing the key immediately blended back to idle, making the animation feel unresponsive for tap-to-move gameplay.
+
+### Root Cause
+Animation blend was directly tied to `m_isMoving` (a boolean tracking whether WASD was currently held). No persistence after key release.
+
+### Fix
+Replaced `m_isMoving` with a **linger timer** (`m_pushLingerTimer`) in `GridGame.h/cpp`:
+* Any WASD press resets the timer to `kPushLingerDuration` (1.0 second).
+* Timer counts down each frame when no WASD is held.
+* Push animation plays while timer > 0, blending back to idle only after the full 1-second window expires.
+* Rapid WASD presses keep resetting the timer, so the push animation loops continuously during rapid input.
+
+### Files Modified
+* `src/gridgame/GridGame.h:91-94` — replaced `m_isMoving` with `m_pushLingerTimer` + `kPushLingerDuration`
+* `src/gridgame/GridGame.cpp` (UpdatePlaying) — linger timer logic replaces direct hold detection
+
+### Status
+*   [x] Fixed

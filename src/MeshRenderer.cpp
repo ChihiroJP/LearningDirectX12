@@ -75,6 +75,8 @@ std::string MeshRenderer::ReloadShaders(DxContext &dx) {
           {"NORMAL", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 12, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0},
           {"TEXCOORD", 0, DXGI_FORMAT_R32G32_FLOAT, 0, 24, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0},
           {"TANGENT", 0, DXGI_FORMAT_R32G32B32A32_FLOAT, 0, 32, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0},
+          {"BLENDINDICES", 0, DXGI_FORMAT_R16G16B16A16_UINT, 0, 48, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0},
+          {"BLENDWEIGHT", 0, DXGI_FORMAT_R32G32B32A32_FLOAT, 0, 56, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0},
       };
       D3D12_GRAPHICS_PIPELINE_STATE_DESC pso{};
       pso.pRootSignature = m_rootSig.Get();
@@ -123,6 +125,8 @@ std::string MeshRenderer::ReloadShaders(DxContext &dx) {
           {"NORMAL", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 12, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0},
           {"TEXCOORD", 0, DXGI_FORMAT_R32G32_FLOAT, 0, 24, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0},
           {"TANGENT", 0, DXGI_FORMAT_R32G32B32A32_FLOAT, 0, 32, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0},
+          {"BLENDINDICES", 0, DXGI_FORMAT_R16G16B16A16_UINT, 0, 48, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0},
+          {"BLENDWEIGHT", 0, DXGI_FORMAT_R32G32B32A32_FLOAT, 0, 56, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0},
       };
       D3D12_GRAPHICS_PIPELINE_STATE_DESC pso{};
       pso.pRootSignature = m_gbufferRootSig.Get();
@@ -169,6 +173,11 @@ std::string MeshRenderer::ReloadShaders(DxContext &dx) {
     if (vs.success) {
       D3D12_INPUT_ELEMENT_DESC inputElems[] = {
           {"POSITION", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 0, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0},
+          {"NORMAL", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 12, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0},
+          {"TEXCOORD", 0, DXGI_FORMAT_R32G32_FLOAT, 0, 24, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0},
+          {"TANGENT", 0, DXGI_FORMAT_R32G32B32A32_FLOAT, 0, 32, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0},
+          {"BLENDINDICES", 0, DXGI_FORMAT_R16G16B16A16_UINT, 0, 48, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0},
+          {"BLENDWEIGHT", 0, DXGI_FORMAT_R32G32B32A32_FLOAT, 0, 56, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0},
       };
       D3D12_GRAPHICS_PIPELINE_STATE_DESC pso{};
       pso.pRootSignature = m_shadowRootSig.Get();
@@ -281,7 +290,7 @@ void MeshRenderer::CreatePipelineOnce(DxContext &dx) {
   iblRange.BaseShaderRegister = 7; // t7, t8, t9
   iblRange.OffsetInDescriptorsFromTableStart = 0;
 
-  D3D12_ROOT_PARAMETER params[5]{};
+  D3D12_ROOT_PARAMETER params[6]{};
   params[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_CBV;
   params[0].Descriptor.ShaderRegister = 0; // b0
   params[0].Descriptor.RegisterSpace = 0;
@@ -307,6 +316,12 @@ void MeshRenderer::CreatePipelineOnce(DxContext &dx) {
   params[4].Descriptor.ShaderRegister = 10; // t10
   params[4].Descriptor.RegisterSpace = 0;
   params[4].ShaderVisibility = D3D12_SHADER_VISIBILITY_VERTEX;
+
+  // Param 5: root SRV t11 — StructuredBuffer<float4x4> bone palette (Phase 2C skinning).
+  params[5].ParameterType = D3D12_ROOT_PARAMETER_TYPE_SRV;
+  params[5].Descriptor.ShaderRegister = 11; // t11
+  params[5].Descriptor.RegisterSpace = 0;
+  params[5].ShaderVisibility = D3D12_SHADER_VISIBILITY_VERTEX;
 
   D3D12_STATIC_SAMPLER_DESC samplers[3]{};
   // s0: material sampler (wrap, linear) — used for all material textures.
@@ -338,7 +353,7 @@ void MeshRenderer::CreatePipelineOnce(DxContext &dx) {
   samplers[2].ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
 
   D3D12_ROOT_SIGNATURE_DESC rsDesc{};
-  rsDesc.NumParameters = 5;
+  rsDesc.NumParameters = 6;
   rsDesc.pParameters = params;
   rsDesc.NumStaticSamplers = 3;
   rsDesc.pStaticSamplers = samplers;
@@ -364,6 +379,10 @@ void MeshRenderer::CreatePipelineOnce(DxContext &dx) {
       {"TEXCOORD", 0, DXGI_FORMAT_R32G32_FLOAT, 0, 24,
        D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0},
       {"TANGENT", 0, DXGI_FORMAT_R32G32B32A32_FLOAT, 0, 32,
+       D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0},
+      {"BLENDINDICES", 0, DXGI_FORMAT_R16G16B16A16_UINT, 0, 48,
+       D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0},
+      {"BLENDWEIGHT", 0, DXGI_FORMAT_R32G32B32A32_FLOAT, 0, 56,
        D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0},
   };
 
@@ -420,7 +439,7 @@ void MeshRenderer::CreateGBufferPipelineOnce(DxContext &dx) {
   matRange.BaseShaderRegister = 0;
   matRange.OffsetInDescriptorsFromTableStart = 0;
 
-  D3D12_ROOT_PARAMETER params[3]{};
+  D3D12_ROOT_PARAMETER params[4]{};
   params[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_CBV;
   params[0].Descriptor.ShaderRegister = 0;
   params[0].Descriptor.RegisterSpace = 0;
@@ -437,6 +456,12 @@ void MeshRenderer::CreateGBufferPipelineOnce(DxContext &dx) {
   params[2].Descriptor.RegisterSpace = 0;
   params[2].ShaderVisibility = D3D12_SHADER_VISIBILITY_VERTEX;
 
+  // Param 3: root SRV t7 — StructuredBuffer<float4x4> bone palette (Phase 2C skinning).
+  params[3].ParameterType = D3D12_ROOT_PARAMETER_TYPE_SRV;
+  params[3].Descriptor.ShaderRegister = 7; // t7
+  params[3].Descriptor.RegisterSpace = 0;
+  params[3].ShaderVisibility = D3D12_SHADER_VISIBILITY_VERTEX;
+
   D3D12_STATIC_SAMPLER_DESC sampler{};
   sampler.Filter = D3D12_FILTER_MIN_MAG_MIP_LINEAR;
   sampler.AddressU = D3D12_TEXTURE_ADDRESS_MODE_WRAP;
@@ -447,7 +472,7 @@ void MeshRenderer::CreateGBufferPipelineOnce(DxContext &dx) {
   sampler.ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
 
   D3D12_ROOT_SIGNATURE_DESC rsDesc{};
-  rsDesc.NumParameters = 3;
+  rsDesc.NumParameters = 4;
   rsDesc.pParameters = params;
   rsDesc.NumStaticSamplers = 1;
   rsDesc.pStaticSamplers = &sampler;
@@ -473,6 +498,10 @@ void MeshRenderer::CreateGBufferPipelineOnce(DxContext &dx) {
       {"TEXCOORD", 0, DXGI_FORMAT_R32G32_FLOAT, 0, 24,
        D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0},
       {"TANGENT", 0, DXGI_FORMAT_R32G32B32A32_FLOAT, 0, 32,
+       D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0},
+      {"BLENDINDICES", 0, DXGI_FORMAT_R16G16B16A16_UINT, 0, 48,
+       D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0},
+      {"BLENDWEIGHT", 0, DXGI_FORMAT_R32G32B32A32_FLOAT, 0, 56,
        D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0},
   };
 
@@ -594,6 +623,25 @@ void MeshRenderer::DrawMeshGBufferInstanced(
     cmd->SetGraphicsRootDescriptorTable(1, mesh.materialTableGpu);
   cmd->SetGraphicsRootShaderResourceView(2, instGpu); // instance buffer
 
+  // Upload bone palette — always upload kMaxBones to prevent out-of-range reads.
+  {
+    constexpr uint32_t boneBytes = kMaxBones * sizeof(DirectX::XMFLOAT4X4);
+    void *boneCpu = nullptr;
+    D3D12_GPU_VIRTUAL_ADDRESS boneGpu =
+        dx.AllocFrameConstants(boneBytes, &boneCpu);
+    auto *boneDst = reinterpret_cast<DirectX::XMFLOAT4X4 *>(boneCpu);
+    if (mesh.bonePalette.boneCount > 0) {
+      for (int b = 0; b < kMaxBones; ++b)
+        DirectX::XMStoreFloat4x4(&boneDst[b],
+                                  DirectX::XMMatrixTranspose(mesh.bonePalette.matrices[b]));
+    } else {
+      for (int b = 0; b < kMaxBones; ++b)
+        DirectX::XMStoreFloat4x4(&boneDst[b],
+                                  DirectX::XMMatrixTranspose(DirectX::XMMatrixIdentity()));
+    }
+    cmd->SetGraphicsRootShaderResourceView(3, boneGpu);
+  }
+
   dx.SetViewportScissorFull();
   cmd->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
   cmd->IASetVertexBuffers(0, 1, &mesh.vbView);
@@ -606,8 +654,9 @@ void MeshRenderer::CreateShadowPipelineOnce(DxContext &dx) {
     return;
 
   // Root Sig: param 0 = root CBV b0 (ShadowCB),
-  //           param 1 = root SRV t0 (instance world matrices).
-  D3D12_ROOT_PARAMETER params[2]{};
+  //           param 1 = root SRV t0 (instance world matrices),
+  //           param 2 = root SRV t1 (bone palette).
+  D3D12_ROOT_PARAMETER params[3]{};
   params[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_CBV;
   params[0].Descriptor.ShaderRegister = 0; // b0
   params[0].Descriptor.RegisterSpace = 0;
@@ -619,8 +668,14 @@ void MeshRenderer::CreateShadowPipelineOnce(DxContext &dx) {
   params[1].Descriptor.RegisterSpace = 0;
   params[1].ShaderVisibility = D3D12_SHADER_VISIBILITY_VERTEX;
 
+  // Param 2: root SRV t1 — StructuredBuffer<float4x4> bone palette (Phase 2C skinning).
+  params[2].ParameterType = D3D12_ROOT_PARAMETER_TYPE_SRV;
+  params[2].Descriptor.ShaderRegister = 1; // t1
+  params[2].Descriptor.RegisterSpace = 0;
+  params[2].ShaderVisibility = D3D12_SHADER_VISIBILITY_VERTEX;
+
   D3D12_ROOT_SIGNATURE_DESC rsDesc{};
-  rsDesc.NumParameters = 2;
+  rsDesc.NumParameters = 3;
   rsDesc.pParameters = params;
   rsDesc.NumStaticSamplers = 0;
   rsDesc.pStaticSamplers = nullptr;
@@ -639,6 +694,16 @@ void MeshRenderer::CreateShadowPipelineOnce(DxContext &dx) {
 
   D3D12_INPUT_ELEMENT_DESC inputElems[] = {
       {"POSITION", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 0,
+       D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0},
+      {"NORMAL", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 12,
+       D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0},
+      {"TEXCOORD", 0, DXGI_FORMAT_R32G32_FLOAT, 0, 24,
+       D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0},
+      {"TANGENT", 0, DXGI_FORMAT_R32G32B32A32_FLOAT, 0, 32,
+       D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0},
+      {"BLENDINDICES", 0, DXGI_FORMAT_R16G16B16A16_UINT, 0, 48,
+       D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0},
+      {"BLENDWEIGHT", 0, DXGI_FORMAT_R32G32B32A32_FLOAT, 0, 56,
        D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0},
   };
 
@@ -837,7 +902,7 @@ uint32_t MeshRenderer::CreateMeshResources(DxContext &dx, const LoadedMesh &mesh
   // Upload heaps for simplicity.
   const UINT vbSize =
       static_cast<UINT>(mesh.vertices.size() * sizeof(MeshVertex));
-  const UINT ibSize = static_cast<UINT>(mesh.indices.size() * sizeof(uint16_t));
+  const UINT ibSize = static_cast<UINT>(mesh.indices.size() * sizeof(uint32_t));
 
   D3D12_HEAP_PROPERTIES uploadHeap{};
   uploadHeap.Type = D3D12_HEAP_TYPE_UPLOAD;
@@ -887,7 +952,7 @@ uint32_t MeshRenderer::CreateMeshResources(DxContext &dx, const LoadedMesh &mesh
 
   gpu.ibView.BufferLocation = gpu.ib->GetGPUVirtualAddress();
   gpu.ibView.SizeInBytes = ibSize;
-  gpu.ibView.Format = DXGI_FORMAT_R16_UINT;
+  gpu.ibView.Format = DXGI_FORMAT_R32_UINT;
 
   // ---- Material textures (5 contiguous SRV slots) ----
   // Allocate 5 contiguous descriptors.
@@ -1182,7 +1247,8 @@ void MeshRenderer::DrawMeshInstanced(
   // Root param 1 = SRV table (t0-t5: material textures + height),
   // Root param 2 = SRV table (t6: shadow map),
   // Root param 3 = SRV table (t7-t9: IBL),
-  // Root param 4 = root SRV (t10: instance worlds).
+  // Root param 4 = root SRV (t10: instance worlds),
+  // Root param 5 = root SRV (t11: bone palette).
   cmd->SetGraphicsRootConstantBufferView(0, cbGpu);
   if (mesh.materialTableGpu.ptr != 0)
     cmd->SetGraphicsRootDescriptorTable(1, mesh.materialTableGpu);
@@ -1191,6 +1257,25 @@ void MeshRenderer::DrawMeshInstanced(
   if (m_iblTableGpu.ptr != 0)
     cmd->SetGraphicsRootDescriptorTable(3, m_iblTableGpu);
   cmd->SetGraphicsRootShaderResourceView(4, instGpu); // instance buffer
+
+  // Upload bone palette — always upload kMaxBones to prevent out-of-range reads.
+  {
+    constexpr uint32_t boneBytes = kMaxBones * sizeof(DirectX::XMFLOAT4X4);
+    void *boneCpu = nullptr;
+    D3D12_GPU_VIRTUAL_ADDRESS boneGpu =
+        dx.AllocFrameConstants(boneBytes, &boneCpu);
+    auto *boneDst = reinterpret_cast<DirectX::XMFLOAT4X4 *>(boneCpu);
+    if (mesh.bonePalette.boneCount > 0) {
+      for (int b = 0; b < kMaxBones; ++b)
+        DirectX::XMStoreFloat4x4(&boneDst[b],
+                                  DirectX::XMMatrixTranspose(mesh.bonePalette.matrices[b]));
+    } else {
+      for (int b = 0; b < kMaxBones; ++b)
+        DirectX::XMStoreFloat4x4(&boneDst[b],
+                                  DirectX::XMMatrixTranspose(DirectX::XMMatrixIdentity()));
+    }
+    cmd->SetGraphicsRootShaderResourceView(5, boneGpu);
+  }
 
   cmd->IASetVertexBuffers(0, 1, &mesh.vbView);
   cmd->IASetIndexBuffer(&mesh.ibView);
@@ -1248,10 +1333,35 @@ void MeshRenderer::DrawMeshShadowInstanced(
 
   cmd->SetGraphicsRootConstantBufferView(0, cbGpu);
   cmd->SetGraphicsRootShaderResourceView(1, instGpu); // instance buffer
+
+  // Upload bone palette — always upload kMaxBones to prevent out-of-range reads.
+  {
+    constexpr uint32_t boneBytes = kMaxBones * sizeof(DirectX::XMFLOAT4X4);
+    void *boneCpu = nullptr;
+    D3D12_GPU_VIRTUAL_ADDRESS boneGpu =
+        dx.AllocFrameConstants(boneBytes, &boneCpu);
+    auto *boneDst = reinterpret_cast<DirectX::XMFLOAT4X4 *>(boneCpu);
+    if (mesh.bonePalette.boneCount > 0) {
+      for (int b = 0; b < kMaxBones; ++b)
+        DirectX::XMStoreFloat4x4(&boneDst[b],
+                                  DirectX::XMMatrixTranspose(mesh.bonePalette.matrices[b]));
+    } else {
+      for (int b = 0; b < kMaxBones; ++b)
+        DirectX::XMStoreFloat4x4(&boneDst[b],
+                                  DirectX::XMMatrixTranspose(DirectX::XMMatrixIdentity()));
+    }
+    cmd->SetGraphicsRootShaderResourceView(2, boneGpu);
+  }
+
   cmd->IASetVertexBuffers(0, 1, &mesh.vbView);
   cmd->IASetIndexBuffer(&mesh.ibView);
   cmd->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
   cmd->DrawIndexedInstanced(mesh.indexCount, instCount, 0, 0, 0);
+}
+
+void MeshRenderer::SetBonePalette(uint32_t meshId, const BonePalette &palette) {
+  if (meshId < m_meshes.size())
+    m_meshes[meshId].bonePalette = palette;
 }
 
 void MeshRenderer::SetIBLDescriptors(D3D12_GPU_DESCRIPTOR_HANDLE iblTableBase) {

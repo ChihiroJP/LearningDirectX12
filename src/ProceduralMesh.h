@@ -2,7 +2,7 @@
 // File: ProceduralMesh.h
 // Purpose: Generate procedural geometry as LoadedMesh structs for the engine
 //          pipeline. All meshes have correct MeshVertex format (pos, normal,
-//          uv, tangent) and uint16_t indices.
+//          uv, tangent) and uint32_t indices.
 // ======================================
 
 #pragma once

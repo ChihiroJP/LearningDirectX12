@@ -19,12 +19,17 @@ cbuffer MeshCB : register(b0)
 // Per-instance world matrices (Phase 12.5 — Instanced Rendering).
 StructuredBuffer<float4x4> gInstanceWorlds : register(t10);
 
+// Bone palette for skeletal animation (Phase 2C).
+StructuredBuffer<float4x4> gBones : register(t11);
+
 struct VSIn
 {
     float3 pos      : POSITION;
     float3 normal   : NORMAL;
     float2 uv       : TEXCOORD;
     float4 tangent  : TANGENT;   // xyz = tangent dir, w = handedness
+    uint4  boneIdx  : BLENDINDICES;
+    float4 boneWgt  : BLENDWEIGHT;
 };
 
 struct PSIn
@@ -47,19 +52,35 @@ struct PSOut
 
 PSIn VSMain(VSIn v, uint instId : SV_InstanceID)
 {
+    // Skeletal skinning: if bone weights sum > 0, apply bone transforms.
+    float3 skinnedPos = v.pos;
+    float3 skinnedNrm = v.normal;
+    float3 skinnedTan = v.tangent.xyz;
+
+    float wSum = v.boneWgt.x + v.boneWgt.y + v.boneWgt.z + v.boneWgt.w;
+    if (wSum > 0.001f)
+    {
+        float4 nw = v.boneWgt / wSum; // normalize weights
+        float4x4 skin = nw.x * gBones[v.boneIdx.x]
+                       + nw.y * gBones[v.boneIdx.y]
+                       + nw.z * gBones[v.boneIdx.z]
+                       + nw.w * gBones[v.boneIdx.w];
+        skinnedPos = mul(float4(v.pos, 1.0f), skin).xyz;
+        skinnedNrm = mul(float4(v.normal, 0.0f), skin).xyz;
+        skinnedTan = mul(float4(v.tangent.xyz, 0.0f), skin).xyz;
+    }
+
     float4x4 world = gInstanceWorlds[instId];
     float4x4 wvp = mul(world, mul(gView, gProj));
 
     PSIn o;
-    o.pos = mul(float4(v.pos, 1.0f), wvp);
-    float4 posW = mul(float4(v.pos, 1.0f), world);
+    o.pos = mul(float4(skinnedPos, 1.0f), wvp);
+    float4 posW = mul(float4(skinnedPos, 1.0f), world);
     o.posW = posW.xyz;
-    o.nrmW = mul(float4(v.normal, 0.0f), world).xyz;
+    o.nrmW = mul(float4(skinnedNrm, 0.0f), world).xyz;
     o.uv = v.uv;
-    // For LH perspective, clip w == view-space Z.
     o.viewZ = o.pos.w;
-    // Transform tangent to world space (direction only, no translation).
-    o.tangentW = mul(float4(v.tangent.xyz, 0.0f), world).xyz;
+    o.tangentW = mul(float4(skinnedTan, 0.0f), world).xyz;
     o.tangentW_w = v.tangent.w;
     return o;
 }

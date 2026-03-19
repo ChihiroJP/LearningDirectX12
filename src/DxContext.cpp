@@ -19,7 +19,7 @@ using Microsoft::WRL::ComPtr;
 
 static UINT Align256(UINT size) { return (size + 255u) & ~255u; }
 
-static constexpr uint32_t kFrameConstantsBytes = 256 * 1024; // 256KB per frame
+static constexpr uint32_t kFrameConstantsBytes = 2 * 1024 * 1024; // 2MB per frame
 
 static void EnableDebugLayerIfRequested(bool enable) {
   if (!enable)

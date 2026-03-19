@@ -100,8 +100,8 @@ float2 voronoi(float2 p)
         for (int i = -1; i <= 1; ++i)
         {
             float2 neighbor = float2((float)i, (float)j);
-            float2 point = hash22(n + neighbor);
-            float2 diff = neighbor + point - f;
+            float2 pt = hash22(n + neighbor);
+            float2 diff = neighbor + pt - f;
             float d = dot(diff, diff);
             if (d < minDist)
             {

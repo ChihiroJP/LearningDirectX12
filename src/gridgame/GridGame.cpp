@@ -11,9 +11,11 @@
 
 #include "../DxContext.h"
 #include "../GltfLoader.h"
+#include "../MeshRenderer.h"
 #include "../ProceduralMesh.h"
 
 #include <algorithm>
+#include <cstdlib>
 #include <imgui.h>
 
 using namespace DirectX;
@@ -98,6 +100,7 @@ static ImVec4 RatingColor(char grade) {
 
 void GridGame::Init(Camera &cam, DxContext &dx) {
   m_camera = &cam;
+  m_dx = &dx;
 
   // Create procedural meshes and upload to GPU.
   auto plane = ProceduralMesh::CreatePlane(1.0f, 1.0f);
@@ -105,8 +108,73 @@ void GridGame::Init(Camera &cam, DxContext &dx) {
   auto cone = ProceduralMesh::CreateCone(0.4f, 1.2f, 12);
 
   // Tile meshes (planes with different materials).
-  m_meshIds.floor = dx.CreateMeshResources(plane, {}, MakeFloorMaterial());
-  m_meshIds.wall = dx.CreateMeshResources(cube, {}, MakeWallMaterial());
+
+  // Floor: load PBR textures (Ground037 set from ambientCG).
+  {
+    LoadedImage floorColor, floorNorm, floorRough, floorAO, floorDisp;
+    MaterialImages floorImages;
+    if (LoadImageFile("Assets/textures/Floor_png/Ground037_2K-PNG_Color.png", floorColor))
+      floorImages.baseColor = &floorColor;
+    if (LoadImageFile("Assets/textures/Floor_png/Ground037_2K-PNG_NormalDX.png", floorNorm))
+      floorImages.normal = &floorNorm;
+    if (LoadImageFile("Assets/textures/Floor_png/Ground037_2K-PNG_AmbientOcclusion.png", floorAO))
+      floorImages.ao = &floorAO;
+    if (LoadImageFile("Assets/textures/Floor_png/Ground037_2K-PNG_Displacement.png", floorDisp))
+      floorImages.height = &floorDisp;
+
+    // Combine roughness (no metalness for ground) into glTF-style metalRough:
+    // G=roughness, B=metallic(0).
+    LoadedImage floorMetalRough;
+    if (LoadImageFile("Assets/textures/Floor_png/Ground037_2K-PNG_Roughness.png", floorRough)) {
+      floorMetalRough = floorRough;
+      for (size_t p = 0; p < floorMetalRough.pixels.size(); p += 4) {
+        uint8_t r = floorRough.pixels[p];
+        floorMetalRough.pixels[p + 0] = 0;
+        floorMetalRough.pixels[p + 1] = r;   // G = roughness
+        floorMetalRough.pixels[p + 2] = 0;   // B = metallic (none)
+        floorMetalRough.pixels[p + 3] = 255;
+      }
+      floorImages.metalRough = &floorMetalRough;
+    }
+
+    Material floorMat = MakeFloorMaterial();
+    floorMat.baseColorFactor = {1.0f, 1.0f, 1.0f, 1.0f};
+    floorMat.uvTiling = {2.0f, 2.0f};
+    m_meshIds.floor = dx.CreateMeshResources(plane, floorImages, floorMat);
+  }
+
+  // Wall: load PBR textures (Metal046B set from ambientCG).
+  {
+    LoadedImage wallColor, wallNorm, wallRough, wallMetal, wallDisp;
+    MaterialImages wallImages;
+    if (LoadImageFile("Assets/textures/Wall_png/Metal046B_2K-PNG_Color.png", wallColor))
+      wallImages.baseColor = &wallColor;
+    if (LoadImageFile("Assets/textures/Wall_png/Metal046B_2K-PNG_NormalDX.png", wallNorm))
+      wallImages.normal = &wallNorm;
+    if (LoadImageFile("Assets/textures/Wall_png/Metal046B_2K-PNG_Displacement.png", wallDisp))
+      wallImages.height = &wallDisp;
+
+    // Combine separate roughness + metalness into glTF-style metalRough.
+    LoadedImage wallMetalRough;
+    bool hasRough = LoadImageFile("Assets/textures/Wall_png/Metal046B_2K-PNG_Roughness.png", wallRough);
+    bool hasMetal = LoadImageFile("Assets/textures/Wall_png/Metal046B_2K-PNG_Metalness.png", wallMetal);
+    if (hasRough || hasMetal) {
+      wallMetalRough = hasRough ? wallRough : wallMetal;
+      for (size_t p = 0; p < wallMetalRough.pixels.size(); p += 4) {
+        uint8_t r = hasRough ? wallRough.pixels[p] : 128;
+        uint8_t m = hasMetal ? wallMetal.pixels[p] : 0;
+        wallMetalRough.pixels[p + 0] = 0;
+        wallMetalRough.pixels[p + 1] = r;   // G = roughness
+        wallMetalRough.pixels[p + 2] = m;   // B = metallic
+        wallMetalRough.pixels[p + 3] = 255;
+      }
+      wallImages.metalRough = &wallMetalRough;
+    }
+
+    Material wallMat = MakeWallMaterial();
+    wallMat.baseColorFactor = {1.0f, 1.0f, 1.0f, 1.0f};
+    m_meshIds.wall = dx.CreateMeshResources(cube, wallImages, wallMat);
+  }
   m_meshIds.wallDestructible =
       dx.CreateMeshResources(cube, {}, MakeDestructibleWallMaterial());
   m_meshIds.fire = dx.CreateMeshResources(plane, {}, MakeFireMaterial());
@@ -128,8 +196,219 @@ void GridGame::Init(Camera &cam, DxContext &dx) {
   // Phase 3B: beam laser mesh (stretched cube).
   m_beamMeshId = dx.CreateMeshResources(cube, {}, MakeBeamMaterial());
 
+  // Hazard beam mesh (purple/magenta, distinct from tower beams).
+  m_hazardBeamMeshId = dx.CreateMeshResources(cube, {}, MakeHazardBeamMaterial());
+
   // Game object meshes.
-  m_playerMeshId = dx.CreateMeshResources(cube, {}, MakePlayerMaterial());
+  // Load VRM character model for player (VRoid Studio export).
+  {
+    GltfLoader playerLoader;
+    if (playerLoader.LoadModel("Assets/models/MyFirstChar.vrm")) {
+      MaterialImages playerImages = playerLoader.GetMaterialImages();
+      Material playerMat = playerLoader.GetMaterial();
+      const auto &loadedMesh = playerLoader.GetMesh();
+      m_playerMeshId = dx.CreateMeshResources(loadedMesh, playerImages, playerMat);
+
+      // Store skeleton for animation.
+      if (loadedMesh.hasSkeleton) {
+        m_playerSkeleton = loadedMesh.skeleton;
+        m_playerHasSkeleton = true;
+        // Set initial bind pose.
+        BonePalette bindPose;
+        ComputeBindPose(m_playerSkeleton, bindPose);
+        dx.GetMeshRenderer().SetBonePalette(m_playerMeshId, bindPose);
+        OutputDebugStringA("[GridGame] Player skeleton extracted, bone count: ");
+        char buf[32];
+        sprintf_s(buf, "%d\n", bindPose.boneCount);
+        OutputDebugStringA(buf);
+
+        // Dump skeleton debug info to file.
+        {
+          FILE *logFile = nullptr;
+          fopen_s(&logFile, "anim_debug.txt", "w");
+          if (logFile) {
+            fprintf(logFile, "=== VRoid Skeleton ===\n");
+            fprintf(logFile, "Bone count: %zu\n\n", m_playerSkeleton.bones.size());
+            for (size_t bi = 0; bi < m_playerSkeleton.bones.size(); ++bi) {
+              const auto &b = m_playerSkeleton.bones[bi];
+              fprintf(logFile, "[%3zu] %-40s parent=%d\n",
+                      bi, b.name.c_str(), b.parentIndex);
+            }
+            fprintf(logFile, "\n");
+            fclose(logFile);
+          }
+        }
+
+        // Load external animation clips (Mixamo exports).
+        std::vector<AnimationClip> idleClips;
+        if (LoadAnimationFile("Assets/models/animations/Idle.glb",
+                              m_playerSkeleton, idleClips)) {
+          for (auto &c : idleClips) {
+            m_playerAnimations.push_back(std::move(c));
+          }
+          m_idleClipIndex = 0;
+
+          // Append animation info to debug log.
+          FILE *logFile = nullptr;
+          fopen_s(&logFile, "anim_debug.txt", "a");
+          if (logFile) {
+            fprintf(logFile, "=== Animation Clips ===\n");
+            for (size_t ci = 0; ci < m_playerAnimations.size(); ++ci) {
+              const auto &clip = m_playerAnimations[ci];
+              fprintf(logFile, "Clip[%zu] \"%s\": duration=%.3fs, tracks=%zu\n",
+                      ci, clip.name.c_str(), clip.duration, clip.tracks.size());
+              for (size_t ti = 0; ti < clip.tracks.size(); ++ti) {
+                const auto &tr = clip.tracks[ti];
+                const char *pathStr = (tr.path == AnimTargetPath::Rotation) ? "ROT"
+                    : (tr.path == AnimTargetPath::Translation) ? "POS" : "SCL";
+                const char *boneName = (tr.boneIndex >= 0 &&
+                    tr.boneIndex < static_cast<int>(m_playerSkeleton.bones.size()))
+                    ? m_playerSkeleton.bones[tr.boneIndex].name.c_str() : "???";
+                fprintf(logFile, "  Track[%2zu] bone=%3d %-35s %s keys=%zu\n",
+                        ti, tr.boneIndex, boneName, pathStr, tr.keyframes.size());
+              }
+            }
+            fclose(logFile);
+          }
+
+          // Enhanced debug: compare bind pose vs animation frame 0 for arm bones.
+          {
+            FILE *dbg = nullptr;
+            fopen_s(&dbg, "anim_debug.txt", "a");
+            if (dbg) {
+              fprintf(dbg, "\n=== Bind vs Anim Frame0 (arm chain) ===\n");
+
+              // Compute VRoid local bind T/R/S from IBMs.
+              int bc = static_cast<int>(m_playerSkeleton.bones.size());
+              std::vector<DirectX::XMMATRIX> gBind(bc);
+              for (int i = 0; i < bc; ++i) {
+                DirectX::XMMATRIX ibm = DirectX::XMLoadFloat4x4(
+                    &m_playerSkeleton.bones[i].inverseBindMatrix);
+                DirectX::XMVECTOR det;
+                gBind[i] = DirectX::XMMatrixInverse(&det, ibm);
+              }
+
+              // Bones to inspect: root, hips->head, arms, legs.
+              int inspectBones[] = {0, 1, 10, 11, 12, 17, 18,
+                                    72, 73, 74, 75, 91, 92, 93, 94,
+                                    110, 119, 120, 121, 122, 131, 132, 133};
+              for (int bi : inspectBones) {
+                if (bi >= bc) continue;
+                const auto &bone = m_playerSkeleton.bones[bi];
+
+                // Compute local bind.
+                DirectX::XMMATRIX localB;
+                if (bone.parentIndex < 0 || bone.parentIndex >= bc) {
+                  localB = gBind[bi];
+                } else {
+                  DirectX::XMVECTOR det;
+                  localB = gBind[bi] *
+                      DirectX::XMMatrixInverse(&det, gBind[bone.parentIndex]);
+                }
+                DirectX::XMVECTOR bS, bR, bT;
+                DirectX::XMMatrixDecompose(&bS, &bR, &bT, localB);
+
+                DirectX::XMFLOAT4 bindR;
+                DirectX::XMStoreFloat4(&bindR, bR);
+                DirectX::XMFLOAT3 bindTr, bindSc;
+                DirectX::XMStoreFloat3(&bindTr, bT);
+                DirectX::XMStoreFloat3(&bindSc, bS);
+
+                // Also get global bind position (world-space).
+                DirectX::XMFLOAT4 gPos;
+                DirectX::XMStoreFloat4(&gPos, gBind[bi].r[3]);
+
+                fprintf(dbg, "[%3d] %-30s parent=%d\n", bi, bone.name.c_str(),
+                        bone.parentIndex);
+                fprintf(dbg, "  bindT=(%.4f, %.4f, %.4f)  bindS=(%.4f, %.4f, %.4f)\n",
+                        bindTr.x, bindTr.y, bindTr.z,
+                        bindSc.x, bindSc.y, bindSc.z);
+                fprintf(dbg, "  bindR=(%.4f, %.4f, %.4f, %.4f)\n",
+                        bindR.x, bindR.y, bindR.z, bindR.w);
+                fprintf(dbg, "  globalPos=(%.4f, %.4f, %.4f)\n",
+                        gPos.x, gPos.y, gPos.z);
+
+                // Find animation frame 0 rotation for this bone.
+                if (m_idleClipIndex >= 0) {
+                  const auto &clip = m_playerAnimations[m_idleClipIndex];
+                  for (const auto &tr : clip.tracks) {
+                    if (tr.boneIndex == bi &&
+                        tr.path == AnimTargetPath::Rotation &&
+                        !tr.keyframes.empty()) {
+                      const auto &kf = tr.keyframes[0];
+                      fprintf(dbg, "  animR=(%.4f, %.4f, %.4f, %.4f) t=%.3f\n",
+                              kf.value.x, kf.value.y, kf.value.z, kf.value.w,
+                              kf.time);
+                      break;
+                    }
+                  }
+                }
+              }
+
+              // Also dump frame-0 skin matrices for key bones.
+              fprintf(dbg, "\n=== Skin Matrices at t=0.033 ===\n");
+              {
+                BonePalette testPal;
+                EvaluateAnimation(m_playerSkeleton,
+                    m_playerAnimations[m_idleClipIndex], 0.033f, testPal);
+                int skinBones[] = {0, 1, 72, 73, 110, 119};
+                for (int si : skinBones) {
+                  if (si >= bc) continue;
+                  DirectX::XMFLOAT4X4 sm;
+                  DirectX::XMStoreFloat4x4(&sm, testPal.matrices[si]);
+                  fprintf(dbg, "[%3d] %-30s\n", si,
+                      m_playerSkeleton.bones[si].name.c_str());
+                  fprintf(dbg, "  |%8.4f %8.4f %8.4f %8.4f|\n",
+                      sm._11, sm._12, sm._13, sm._14);
+                  fprintf(dbg, "  |%8.4f %8.4f %8.4f %8.4f|\n",
+                      sm._21, sm._22, sm._23, sm._24);
+                  fprintf(dbg, "  |%8.4f %8.4f %8.4f %8.4f|\n",
+                      sm._31, sm._32, sm._33, sm._34);
+                  fprintf(dbg, "  |%8.4f %8.4f %8.4f %8.4f|\n",
+                      sm._41, sm._42, sm._43, sm._44);
+                }
+              }
+              fclose(dbg);
+            }
+          }
+
+          OutputDebugStringA("[GridGame] Idle animation loaded OK\n");
+        } else {
+          OutputDebugStringA("[GridGame] WARNING: Failed to load Idle.glb\n");
+        }
+
+        // Load push/move animation (Mixamo export).
+        std::vector<AnimationClip> pushClips;
+        if (LoadAnimationFile("Assets/models/animations/Push.glb",
+                              m_playerSkeleton, pushClips)) {
+          m_pushClipIndex = static_cast<int>(m_playerAnimations.size());
+          for (auto &c : pushClips) {
+            m_playerAnimations.push_back(std::move(c));
+          }
+          OutputDebugStringA("[GridGame] Push animation loaded OK\n");
+        } else {
+          OutputDebugStringA("[GridGame] WARNING: Failed to load Push.glb\n");
+        }
+
+        // Load run animation (Mixamo export).
+        std::vector<AnimationClip> runClips;
+        if (LoadAnimationFile("Assets/models/animations/Run.glb",
+                              m_playerSkeleton, runClips)) {
+          m_runClipIndex = static_cast<int>(m_playerAnimations.size());
+          for (auto &c : runClips) {
+            m_playerAnimations.push_back(std::move(c));
+          }
+          OutputDebugStringA("[GridGame] Run animation loaded OK\n");
+        } else {
+          OutputDebugStringA("[GridGame] WARNING: Failed to load Run.glb\n");
+        }
+      }
+      OutputDebugStringA("[GridGame] Player VRM model loaded OK\n");
+    } else {
+      OutputDebugStringA("[GridGame] FAILED to load player VRM, falling back to cube\n");
+      m_playerMeshId = dx.CreateMeshResources(cube, {}, MakePlayerMaterial());
+    }
+  }
 
   // Cargo cube: load rock textures for base color, normal, and roughness.
   {
@@ -194,6 +473,60 @@ void GridGame::UpdateBurstEmitters(float dt) {
                        return burst && burst->IsFinished();
                      }),
       m_burstEmitters.end());
+}
+
+// ---- Hazard beam system ----
+
+void GridGame::SpawnHazardBeams() {
+  int w = m_map.Width();
+  int h = m_map.Height();
+  if (w <= 0 || h <= 0) return;
+
+  for (int i = 0; i < kBeamsPerSpawn; ++i) {
+    HazardBeam beam;
+    // Random: 50% row, 50% column.
+    beam.isRow = (rand() % 2) == 0;
+    beam.index = beam.isRow ? (rand() % h) : (rand() % w);
+    beam.timer = 0.0f;
+    beam.damaged = false;
+    m_hazardBeams.push_back(beam);
+  }
+}
+
+void GridGame::UpdateHazardBeams(float dt) {
+  // Spawn timer.
+  m_hazardBeamSpawnTimer += dt;
+  if (m_hazardBeamSpawnTimer >= kBeamSpawnInterval) {
+    m_hazardBeamSpawnTimer -= kBeamSpawnInterval;
+    SpawnHazardBeams();
+  }
+
+  // Update existing beams.
+  for (auto &beam : m_hazardBeams) {
+    beam.timer += dt;
+
+    // Apply damage once at warning time.
+    if (!beam.damaged && beam.timer >= kBeamWarnTime) {
+      beam.damaged = true;
+
+      // Check if player is on affected row/column.
+      bool playerHit = false;
+      if (beam.isRow && m_playerY == beam.index)
+        playerHit = true;
+      else if (!beam.isRow && m_playerX == beam.index)
+        playerHit = true;
+
+      if (playerHit) {
+        TakeDamage(1);
+      }
+    }
+  }
+
+  // Remove expired beams.
+  m_hazardBeams.erase(
+      std::remove_if(m_hazardBeams.begin(), m_hazardBeams.end(),
+                     [](const HazardBeam &b) { return b.timer >= kBeamLifetime; }),
+      m_hazardBeams.end());
 }
 
 XMFLOAT3 GridGame::GetTowerWorldPos(const RuntimeTower &t) const {
@@ -322,10 +655,19 @@ void GridGame::LoadTestStage() {
   m_stunTimer = 0.0f;
   m_sliding = false;
   m_slideDx = m_slideDy = 0;
+  m_cargoDropping = false;
+  m_cargoDropTimer = 0.0f;
   m_prevTileX = m_playerX;
   m_prevTileY = m_playerY;
   for (auto &mark : m_trail) mark.active = false;
   m_trailHead = 0;
+
+  // Reset camera mode and hazard beams.
+  m_topDownMode = false;
+  m_topDownBlend = 0.0f;
+  m_prevCamToggle = false;
+  m_hazardBeams.clear();
+  m_hazardBeamSpawnTimer = 0.0f;
 
   // Stagger hazard timers.
   int hazardIdx = 0;
@@ -355,7 +697,17 @@ void GridGame::ReloadCurrentStage() {
     m_prevUp = m_prevDown = m_prevLeft = m_prevRight = false;
     m_repeatActive = false;
     m_repeatTimer = 0.0f;
-    m_state = GridGameState::Playing;
+    // Find goal for intro camera.
+    m_goalWorldPos = m_playerVisualPos;
+    for (int y = 0; y < m_map.Height(); ++y)
+      for (int x = 0; x < m_map.Width(); ++x)
+        if (m_map.At(x, y).type == TileType::Goal) {
+          m_goalWorldPos = m_map.TileCenter(x, y);
+          goto foundGoal1;
+        }
+    foundGoal1:
+    m_introTimer = 0.0f;
+    m_state = GridGameState::Intro;
   }
 }
 
@@ -419,6 +771,9 @@ void GridGame::LoadFromStageData(const StageData &stage) {
   m_stunTimer = 0.0f;
   m_sliding = false;
   m_slideDx = m_slideDy = 0;
+  m_cargoDropping = false;
+  m_cargoDropTimer = 0.0f;
+  m_shakeTimer = 0.0f;
   m_prevTileX = m_playerX;
   m_prevTileY = m_playerY;
   for (auto &mark : m_trail) mark.active = false;
@@ -442,7 +797,34 @@ void GridGame::LoadFromStageData(const StageData &stage) {
 
   CreateGameEmitters();
   InitTowers();
-  m_state = GridGameState::Playing;
+
+  // Initialize TPS camera behind player.
+  m_playerFacingYaw = 0.0f;
+  m_playerVisualYaw = 0.0f;
+  m_tpsCamYaw = 0.0f;
+  m_tpsCamActualDist = m_tpsCamDist;
+
+  // Reset camera mode and hazard beams.
+  m_topDownMode = false;
+  m_topDownBlend = 0.0f;
+  m_prevCamToggle = false;
+  m_hazardBeams.clear();
+  m_hazardBeamSpawnTimer = 0.0f;
+
+  // Find goal tile position for intro camera pan.
+  m_goalWorldPos = m_playerVisualPos; // fallback if no goal found
+  for (int y = 0; y < H; ++y) {
+    for (int x = 0; x < W; ++x) {
+      if (m_map.At(x, y).type == TileType::Goal) {
+        m_goalWorldPos = m_map.TileCenter(x, y);
+        break;
+      }
+    }
+  }
+
+  // Start with intro camera cinematic.
+  m_introTimer = 0.0f;
+  m_state = GridGameState::Intro;
 }
 
 // ---- Phase 2: Movement helpers ----
@@ -491,6 +873,8 @@ void GridGame::TryMove(int dx, int dy, bool pulling) {
     return;
   if (m_stunned)
     return;
+  if (m_cargoDropping)
+    return; // all input locked during cargo drop-off
 
   int nx = m_playerX + dx;
   int ny = m_playerY + dy;
@@ -498,10 +882,17 @@ void GridGame::TryMove(int dx, int dy, bool pulling) {
   if (!m_map.IsWalkable(nx, ny))
     return;
 
+  // Update player facing direction based on move (dx maps to X, dy maps to Z).
+  // Skip when pulling — player walks backward, keeps facing the cargo.
+  if (!pulling)
+    m_playerFacingYaw = atan2f(static_cast<float>(dx), static_cast<float>(dy));
+
   bool destHasCargo = (nx == m_cargoX && ny == m_cargoY);
 
   // Track previous tile for crumble step-off.
   int oldX = m_playerX, oldY = m_playerY;
+
+  m_lastMoveWasCargoInteraction = false; // reset; set below if cargo moves
 
   if (pulling && !destHasCargo) {
     int behindX = m_playerX - dx;
@@ -510,6 +901,7 @@ void GridGame::TryMove(int dx, int dy, bool pulling) {
 
     if (cargoBehind) {
       SetCargoPosition(m_playerX, m_playerY);
+      m_lastMoveWasCargoInteraction = true;
     }
     SetPlayerPosition(nx, ny);
     if (!m_sliding)
@@ -518,8 +910,25 @@ void GridGame::TryMove(int dx, int dy, bool pulling) {
     if (destHasCargo) {
       int cx = m_cargoX + dx;
       int cy = m_cargoY + dy;
-      if (!m_map.IsWalkable(cx, cy))
+      if (!m_map.IsWalkable(cx, cy)) {
+        // Check if cargo is being pushed off the grid edge (out of bounds).
+        if (!m_map.InBounds(cx, cy)) {
+          // Start cargo drop-off animation.
+          m_cargoDropping = true;
+          m_cargoDropTimer = 0.0f;
+          m_cargoDropDx = dx;
+          m_cargoDropDy = dy;
+          m_cargoDropFrom = m_cargoVisualPos;
+          m_lastMoveWasCargoInteraction = true;
+
+          // Player moves into cargo's old position.
+          SetPlayerPosition(nx, ny);
+          ++m_moveCount;
+        }
         return;
+      }
+
+      m_lastMoveWasCargoInteraction = true;
 
       // Cargo ice slide: if cargo destination is ice, keep sliding.
       SetCargoPosition(cx, cy);
@@ -581,6 +990,8 @@ void GridGame::TakeDamage(int amount) {
   m_playerHP -= amount;
   m_iFrameTimer = kIFrameDuration;
   m_damageFlashTimer = 0.25f;
+  m_shakeTimer = kShakeDuration;
+  m_shakeIntensity = kShakeStrength;
 
   // Phase 8B: damage hit burst VFX at player position.
   {
@@ -798,6 +1209,79 @@ void GridGame::Update(float dt, Input &input, Win32Window & /*window*/,
                       FrameData &frame) {
   m_uiTimer += dt;
 
+  // Skeletal animation: 3-state crossfade (idle / run / push).
+  // Push = moving cargo, Run = moving without cargo, Idle = standing still.
+  if (m_playerHasSkeleton && m_dx) {
+    // Push linger: cargo interaction resets a 1-second timer.
+    if (m_lastMoveWasCargoInteraction)
+      m_pushLingerTimer = kPushLingerDuration;
+    else if (m_pushLingerTimer > 0.0f)
+      m_pushLingerTimer = std::max(0.0f, m_pushLingerTimer - dt);
+
+    // Move linger: player movement resets a short timer to smooth run→idle.
+    bool playerCurrentlyMoving = m_playerLerpT < 1.0f;
+    if (playerCurrentlyMoving)
+      m_moveLingerTimer = kMoveLingerDuration;
+    else if (m_moveLingerTimer > 0.0f)
+      m_moveLingerTimer = std::max(0.0f, m_moveLingerTimer - dt);
+
+    bool wantPush = m_pushLingerTimer > 0.0f;
+    bool wantRun  = !wantPush && m_moveLingerTimer > 0.0f;
+
+    // Determine desired clip: push > run > idle.
+    int desiredClip = m_idleClipIndex; // default
+    if (wantPush && m_pushClipIndex >= 0)
+      desiredClip = m_pushClipIndex;
+    else if (wantRun && m_runClipIndex >= 0)
+      desiredClip = m_runClipIndex;
+
+    // Crossfade: when desired clip changes, start transition.
+    if (desiredClip != m_animActiveClip) {
+      m_animPrevClip = m_animActiveClip;
+      m_animTransition = 0.0f;
+      m_animActiveClip = desiredClip;
+    }
+
+    // Ramp transition toward 1.
+    if (m_animTransition < 1.0f) {
+      m_animTransition = std::min(1.0f, m_animTransition + dt * kAnimBlendSpeed);
+    }
+
+    // Accumulate time for all clips (keeps loops smooth).
+    m_animTime += dt;
+    m_pushAnimTime += dt;
+    m_runAnimTime += dt;
+
+    // Helper to get time accumulator for a clip index.
+    auto getClipTime = [&](int clipIdx) -> float {
+      if (clipIdx == m_pushClipIndex) return m_pushAnimTime;
+      if (clipIdx == m_runClipIndex)  return m_runAnimTime;
+      return m_animTime; // idle or fallback
+    };
+
+    BonePalette palette;
+    bool hasActive = m_animActiveClip >= 0 &&
+                     m_animActiveClip < static_cast<int>(m_playerAnimations.size());
+    bool hasPrev   = m_animPrevClip >= 0 &&
+                     m_animPrevClip < static_cast<int>(m_playerAnimations.size());
+
+    if (hasActive && hasPrev && m_animTransition > 0.001f && m_animTransition < 0.999f) {
+      // Crossfade between previous and active clip.
+      EvaluateAnimationBlend(m_playerSkeleton,
+                             m_playerAnimations[m_animPrevClip], getClipTime(m_animPrevClip),
+                             m_playerAnimations[m_animActiveClip], getClipTime(m_animActiveClip),
+                             m_animTransition, palette);
+    } else if (hasActive) {
+      // Fully in active clip.
+      EvaluateAnimation(m_playerSkeleton,
+                        m_playerAnimations[m_animActiveClip], getClipTime(m_animActiveClip),
+                        palette);
+    } else {
+      ComputeProceduralIdle(m_playerSkeleton, m_animTime, palette);
+    }
+    m_dx->GetMeshRenderer().SetBonePalette(m_playerMeshId, palette);
+  }
+
   // ESC edge detection.
   bool escNow = input.IsKeyDown(VK_ESCAPE);
   bool escPressed = escNow && !m_prevEsc;
@@ -809,6 +1293,9 @@ void GridGame::Update(float dt, Input &input, Win32Window & /*window*/,
     break;
   case GridGameState::StageSelect:
     UpdateStageSelect(frame);
+    break;
+  case GridGameState::Intro:
+    UpdateIntro(dt, input, frame);
     break;
   case GridGameState::Playing:
     if (escPressed) {
@@ -837,7 +1324,7 @@ void GridGame::Update(float dt, Input &input, Win32Window & /*window*/,
   frame.ssaoEnabled = true;
 
   // Subtle bloom breathing tied to game time.
-  if (m_state == GridGameState::Playing) {
+  if (m_state == GridGameState::Intro || m_state == GridGameState::Playing) {
     float bloomPulse = 1.0f + 0.1f * sinf(m_stageTimer * 1.0f * 3.14159f);
     frame.bloomIntensity *= bloomPulse;
   }
@@ -888,7 +1375,17 @@ void GridGame::UpdateMainMenu(FrameData & /*frame*/) {
     m_prevUp = m_prevDown = m_prevLeft = m_prevRight = false;
     m_repeatActive = false;
     m_repeatTimer = 0.0f;
-    m_state = GridGameState::Playing;
+    // Find goal for intro camera.
+    m_goalWorldPos = m_playerVisualPos;
+    for (int y = 0; y < m_map.Height(); ++y)
+      for (int x = 0; x < m_map.Width(); ++x)
+        if (m_map.At(x, y).type == TileType::Goal) {
+          m_goalWorldPos = m_map.TileCenter(x, y);
+          goto foundGoal2;
+        }
+    foundGoal2:
+    m_introTimer = 0.0f;
+    m_state = GridGameState::Intro;
   }
   ImGui::Spacing();
   if (CenteredButton("QUIT", btnW, winW)) {
@@ -911,10 +1408,31 @@ void GridGame::UpdateMainMenu(FrameData & /*frame*/) {
 
 void GridGame::UpdateStageSelect(FrameData & /*frame*/) {
   // Placeholder for Phase 5.
-  m_state = GridGameState::Playing;
+  m_introTimer = 0.0f;
+  m_state = GridGameState::Intro;
+}
+
+void GridGame::UpdateIntro(float dt, Input &input, FrameData & /*frame*/) {
+  m_dt = dt;
+  m_introTimer += dt;
+
+  float totalIntro = kIntroHoldPlayer + kIntroPanToGoal + kIntroHoldGoal + kIntroPanBack;
+
+  // Skip intro: any key, mouse click, or gamepad button.
+  bool skip = input.IsKeyDown(VK_SPACE) || input.IsKeyDown(VK_RETURN) ||
+              input.IsKeyDown(VK_ESCAPE) || input.IsKeyDown('W') ||
+              input.IsKeyDown('A') || input.IsKeyDown('S') || input.IsKeyDown('D') ||
+              input.IsKeyDown(VK_LBUTTON) ||
+              input.IsGamepadButtonDown(XINPUT_GAMEPAD_A) ||
+              input.IsGamepadButtonDown(XINPUT_GAMEPAD_START);
+
+  if (m_introTimer >= totalIntro || (skip && m_introTimer > 0.3f)) {
+    m_state = GridGameState::Playing;
+  }
 }
 
 void GridGame::UpdatePlaying(float dt, Input &input, FrameData & /*frame*/) {
+  m_dt = dt;
   m_stageTimer += dt;
 
   // Phase 6: age trail marks.
@@ -944,6 +1462,8 @@ void GridGame::UpdatePlaying(float dt, Input &input, FrameData & /*frame*/) {
     m_iFrameTimer -= dt;
   if (m_damageFlashTimer > 0.0f)
     m_damageFlashTimer -= dt;
+  if (m_shakeTimer > 0.0f)
+    m_shakeTimer -= dt;
 
   // --- Tick stun timer ---
   if (m_stunned) {
@@ -954,46 +1474,130 @@ void GridGame::UpdatePlaying(float dt, Input &input, FrameData & /*frame*/) {
     }
   }
 
-  // --- Camera controls ---
-  // Scroll wheel zoom.
-  float scroll = input.ConsumeScrollDelta();
-  if (scroll != 0.0f) {
-    m_cameraDistance -= scroll * kCamZoomSpeed;
-    if (m_cameraDistance < kCamDistMin)
-      m_cameraDistance = kCamDistMin;
-    if (m_cameraDistance > kCamDistMax)
-      m_cameraDistance = kCamDistMax;
+  // --- Camera mode toggle (R key / B button) ---
+  {
+    bool toggleNow = input.IsKeyDown('R') ||
+                     input.IsGamepadButtonDown(XINPUT_GAMEPAD_B);
+    if (toggleNow && !m_prevCamToggle) {
+      m_topDownMode = !m_topDownMode;
+    }
+    m_prevCamToggle = toggleNow;
+
+    // Smoothly blend toward target mode.
+    float target = m_topDownMode ? 1.0f : 0.0f;
+    float diff = target - m_topDownBlend;
+    m_topDownBlend += diff * std::min(1.0f, kCamTransitionSpeed * dt);
+    // Snap when very close.
+    if (fabsf(m_topDownBlend - target) < 0.001f)
+      m_topDownBlend = target;
   }
 
-  // RMB drag to rotate yaw.
+  // --- Update hazard beams ---
+  UpdateHazardBeams(dt);
+
+  // --- TPS Camera controls ---
+  float scroll = input.ConsumeScrollDelta();
+  if (scroll != 0.0f) {
+    if (input.IsKeyDown(VK_CONTROL)) {
+      // Ctrl+Scroll: adjust FOV.
+      float fov = m_camera->FovY() - scroll * 0.05f;
+      fov = std::max(0.2f, std::min(fov, 2.0f)); // ~11-115 degrees
+      m_camera->SetLens(fov, m_camera->Aspect(), m_camera->NearZ(), m_camera->FarZ());
+    } else {
+      // Scroll: zoom TPS distance.
+      m_tpsCamDist -= scroll * kCamZoomSpeed;
+      m_tpsCamDist = std::clamp(m_tpsCamDist, kTpsCamDistMin, kTpsCamDistMax);
+    }
+  }
+
+  // RMB drag to orbit TPS camera around player.
   if (input.IsKeyDown(VK_RBUTTON)) {
     MouseDelta md = input.ConsumeMouseDelta();
-    m_cameraYaw += static_cast<float>(md.dx) * 0.005f;
+    m_tpsCamYaw += static_cast<float>(md.dx) * 0.005f;
+    m_tpsCamPitch -= static_cast<float>(md.dy) * 0.005f;
+    m_tpsCamPitch = std::clamp(m_tpsCamPitch, 0.1f, 1.4f); // clamp vertical
   } else {
     input.ConsumeMouseDelta(); // discard when not rotating
   }
 
-  // --- Pull modifier ---
-  bool pulling = input.IsKeyDown('E');
+  // Smoothly follow player facing direction (only when not RMB orbiting).
+  if (!input.IsKeyDown(VK_RBUTTON)) {
+    // Shortest-arc interpolation for yaw.
+    float diff = m_playerFacingYaw - m_tpsCamYaw;
+    // Wrap to [-PI, PI].
+    while (diff > 3.14159f) diff -= 6.28318f;
+    while (diff < -3.14159f) diff += 6.28318f;
+    m_tpsCamYaw += diff * std::min(1.0f, kTpsCamSmoothSpeed * dt);
+  }
 
-  // --- Input edge detection (press-to-move) ---
-  bool upNow = input.IsKeyDown('W') || input.IsKeyDown(VK_UP);
-  bool downNow = input.IsKeyDown('S') || input.IsKeyDown(VK_DOWN);
-  bool leftNow = input.IsKeyDown('A') || input.IsKeyDown(VK_LEFT);
-  bool rightNow = input.IsKeyDown('D') || input.IsKeyDown(VK_RIGHT);
+  // Smooth player model rotation (visual yaw lerps toward facing yaw).
+  {
+    float diff = m_playerFacingYaw - m_playerVisualYaw;
+    while (diff > 3.14159f) diff -= 6.28318f;
+    while (diff < -3.14159f) diff += 6.28318f;
+    m_playerVisualYaw += diff * std::min(1.0f, kPlayerTurnSpeed * dt);
+  }
+
+  // --- Pull modifier (keyboard E or gamepad A button) ---
+  bool pulling = input.IsKeyDown('E') ||
+                 input.IsGamepadButtonDown(XINPUT_GAMEPAD_A);
+
+  // --- Input edge detection (press-to-move, camera-relative) ---
+  // Merge keyboard + gamepad left stick (digitized with threshold).
+  constexpr float kStickThreshold = 0.5f;
+  float stickX = input.LeftStickX();
+  float stickY = input.LeftStickY();
+  // Snap stick to dominant axis to avoid diagonal movement on a tile grid.
+  if (fabsf(stickX) > fabsf(stickY)) stickY = 0.0f;
+  else stickX = 0.0f;
+
+  bool upNow    = input.IsKeyDown('W') || input.IsKeyDown(VK_UP)    || stickY > kStickThreshold;
+  bool downNow  = input.IsKeyDown('S') || input.IsKeyDown(VK_DOWN)  || stickY < -kStickThreshold;
+  bool leftNow  = input.IsKeyDown('A') || input.IsKeyDown(VK_LEFT)  || stickX < -kStickThreshold;
+  bool rightNow = input.IsKeyDown('D') || input.IsKeyDown(VK_RIGHT) || stickX > kStickThreshold;
+
+  // Convert camera-relative WASD to grid-space cardinal directions.
+  // Camera forward is m_tpsCamYaw: atan2(dx,dy) convention where yaw=0 is +Z.
+  // Snap camera forward to nearest cardinal direction, then derive all 4.
+  auto snapToCardinal = [](float yaw, int &outDx, int &outDy) {
+    // Normalize to [0, 2PI).
+    float a = fmodf(yaw, 6.28318f);
+    if (a < 0.0f) a += 6.28318f;
+    // Snap to 4 sectors: 0=+Z(dy+1), PI/2=+X(dx+1), PI=-Z(dy-1), 3PI/2=-X(dx-1)
+    if (a < 0.7854f || a >= 5.4978f) { outDx = 0; outDy = 1; }       // ~0°    → +Z
+    else if (a < 2.3562f)            { outDx = 1; outDy = 0; }        // ~90°   → +X
+    else if (a < 3.9270f)            { outDx = 0; outDy = -1; }       // ~180°  → -Z
+    else                             { outDx = -1; outDy = 0; }       // ~270°  → -X
+  };
+
+  // Forward/back/left/right: camera-relative in TPS, world-based in top-down.
+  int fwdDx, fwdDy, backDx, backDy, leftDx, leftDy, rightDx, rightDy;
+  if (m_topDownMode) {
+    // World-based: W=+Z, S=-Z, A=-X, D=+X.
+    fwdDx = 0;  fwdDy = 1;
+    backDx = 0; backDy = -1;
+    leftDx = -1; leftDy = 0;
+    rightDx = 1; rightDy = 0;
+  } else {
+    // Camera-relative in TPS mode.
+    snapToCardinal(m_tpsCamYaw, fwdDx, fwdDy);
+    snapToCardinal(m_tpsCamYaw + 3.14159f, backDx, backDy);
+    snapToCardinal(m_tpsCamYaw - 1.5708f, leftDx, leftDy);
+    snapToCardinal(m_tpsCamYaw + 1.5708f, rightDx, rightDy);
+  }
 
   // Determine current direction for repeat tracking.
   int moveDx = 0, moveDy = 0;
   bool edgeTriggered = false;
 
   if (upNow && !m_prevUp) {
-    moveDx = 0; moveDy = -1; edgeTriggered = true;
+    moveDx = fwdDx; moveDy = fwdDy; edgeTriggered = true;
   } else if (downNow && !m_prevDown) {
-    moveDx = 0; moveDy = 1; edgeTriggered = true;
+    moveDx = backDx; moveDy = backDy; edgeTriggered = true;
   } else if (leftNow && !m_prevLeft) {
-    moveDx = -1; moveDy = 0; edgeTriggered = true;
+    moveDx = leftDx; moveDy = leftDy; edgeTriggered = true;
   } else if (rightNow && !m_prevRight) {
-    moveDx = 1; moveDy = 0; edgeTriggered = true;
+    moveDx = rightDx; moveDy = rightDy; edgeTriggered = true;
   }
 
   if (edgeTriggered && !m_stunned) {
@@ -1004,13 +1608,13 @@ void GridGame::UpdatePlaying(float dt, Input &input, FrameData & /*frame*/) {
     m_repeatActive = true;
   }
 
-  // Hold-to-repeat: if same direction key still held.
+  // Hold-to-repeat: if same direction key still held (camera-relative).
   bool holdingRepeatDir = false;
   if (m_repeatActive) {
-    if (m_repeatDy == -1 && upNow) holdingRepeatDir = true;
-    else if (m_repeatDy == 1 && downNow) holdingRepeatDir = true;
-    else if (m_repeatDx == -1 && leftNow) holdingRepeatDir = true;
-    else if (m_repeatDx == 1 && rightNow) holdingRepeatDir = true;
+    if (m_repeatDx == fwdDx && m_repeatDy == fwdDy && upNow) holdingRepeatDir = true;
+    else if (m_repeatDx == backDx && m_repeatDy == backDy && downNow) holdingRepeatDir = true;
+    else if (m_repeatDx == leftDx && m_repeatDy == leftDy && leftNow) holdingRepeatDir = true;
+    else if (m_repeatDx == rightDx && m_repeatDy == rightDy && rightNow) holdingRepeatDir = true;
   }
 
   if (m_repeatActive && holdingRepeatDir) {
@@ -1082,6 +1686,27 @@ void GridGame::UpdatePlaying(float dt, Input &input, FrameData & /*frame*/) {
     }
   }
 
+  // --- Cargo drop-off animation (pushed off grid edge) ---
+  if (m_cargoDropping) {
+    m_cargoDropTimer += dt;
+    float t = std::min(m_cargoDropTimer / kCargoDropDuration, 1.0f);
+
+    // Ease-in for gravity feel: t^2 on the Y fall.
+    float tFall = t * t;
+
+    // Slide off in push direction + fall down.
+    m_cargoVisualPos.x = m_cargoDropFrom.x +
+        static_cast<float>(m_cargoDropDx) * kCargoDropSlideDistance * t;
+    m_cargoVisualPos.z = m_cargoDropFrom.z +
+        static_cast<float>(m_cargoDropDy) * kCargoDropSlideDistance * t;
+    m_cargoVisualPos.y = m_cargoDropFrom.y - kCargoDropFallDepth * tFall;
+
+    if (m_cargoDropTimer >= kCargoDropDuration) {
+      m_cargoDropping = false;
+      m_state = GridGameState::StageFail;
+    }
+    // Skip win condition while dropping.
+  } else
   // --- Win condition: cargo on Goal tile after animation ---
   if (m_cargoLerpT >= 1.0f &&
       m_map.At(m_cargoX, m_cargoY).type == TileType::Goal) {
@@ -1280,34 +1905,181 @@ void GridGame::UpdateStageFail(FrameData & /*frame*/) {
 // ---- Scene building ----
 
 void GridGame::BuildScene(FrameData &frame) {
-  // Dynamic camera focus: track player/cargo during gameplay,
-  // grid center otherwise.
-  float focusX, focusZ;
-  if (m_state == GridGameState::Playing || m_state == GridGameState::Paused ||
-      m_state == GridGameState::StageComplete) {
-    focusX = m_playerVisualPos.x * 0.7f + m_cargoVisualPos.x * 0.3f;
-    focusZ = m_playerVisualPos.z * 0.7f + m_cargoVisualPos.z * 0.3f;
+  // Camera positioning: TPS during gameplay, orbit overview otherwise.
+  float camX, camY, camZ;
+  float lookYaw, lookPitch;
+
+  bool inGameplay = (m_state == GridGameState::Intro ||
+                     m_state == GridGameState::Playing ||
+                     m_state == GridGameState::Paused ||
+                     m_state == GridGameState::StageComplete ||
+                     m_state == GridGameState::StageFail);
+
+  if (inGameplay && m_state == GridGameState::Intro) {
+    // Intro cinematic camera: smooth pan from player to goal and back.
+    float totalIntro = kIntroHoldPlayer + kIntroPanToGoal + kIntroHoldGoal + kIntroPanBack;
+    float t = std::clamp(m_introTimer, 0.0f, totalIntro);
+
+    // Determine focus point blend (0=player, 1=goal) using eased transitions.
+    float focusBlend = 0.0f;
+    if (t < kIntroHoldPlayer) {
+      focusBlend = 0.0f; // hold on player
+    } else if (t < kIntroHoldPlayer + kIntroPanToGoal) {
+      float p = (t - kIntroHoldPlayer) / kIntroPanToGoal;
+      focusBlend = p * p * (3.0f - 2.0f * p); // smoothstep ease
+    } else if (t < kIntroHoldPlayer + kIntroPanToGoal + kIntroHoldGoal) {
+      focusBlend = 1.0f; // hold on goal
+    } else {
+      float p = (t - kIntroHoldPlayer - kIntroPanToGoal - kIntroHoldGoal) / kIntroPanBack;
+      focusBlend = 1.0f - p * p * (3.0f - 2.0f * p); // smoothstep back
+    }
+
+    // Interpolate focus position between player and goal.
+    float focusX = m_playerVisualPos.x + (m_goalWorldPos.x - m_playerVisualPos.x) * focusBlend;
+    float focusZ = m_playerVisualPos.z + (m_goalWorldPos.z - m_playerVisualPos.z) * focusBlend;
+    float focusY = 0.5f; // look at ground level
+
+    // Camera orbits slightly elevated, at a moderate distance.
+    float introDist = m_tpsCamDist * 1.3f;
+    float introPitch = 0.65f; // slightly steeper than normal TPS
+    float introYaw = m_tpsCamYaw + 3.14159f; // behind player facing
+
+    camX = focusX + introDist * cosf(introPitch) * sinf(introYaw);
+    camY = m_tpsCamHeight + introDist * sinf(introPitch);
+    camZ = focusZ + introDist * cosf(introPitch) * cosf(introYaw);
+
+    // Look toward focus point.
+    float dx_ = focusX - camX;
+    float dy_ = focusY - camY;
+    float dz_ = focusZ - camZ;
+    float horizDist = sqrtf(dx_ * dx_ + dz_ * dz_);
+    lookYaw = atan2f(dx_, dz_);
+    lookPitch = atan2f(dy_, horizDist);
+  } else if (inGameplay) {
+    // TPS camera: positioned behind and above the player.
+    // Camera sits opposite the player's facing direction.
+    float behindYaw = m_tpsCamYaw + 3.14159f; // 180 degrees behind facing
+
+    // Compute desired camera position at full distance.
+    float desiredX = m_playerVisualPos.x + m_tpsCamDist * cosf(m_tpsCamPitch) * sinf(behindYaw);
+    float desiredY = m_tpsCamHeight + m_tpsCamDist * sinf(m_tpsCamPitch);
+    float desiredZ = m_playerVisualPos.z + m_tpsCamDist * cosf(m_tpsCamPitch) * cosf(behindYaw);
+
+    // Camera collision: walk from player toward desired camera position,
+    // check if the camera would be behind a wall or outside the grid over a wall.
+    // Sample points along the ray and find the closest blocking point.
+    float wantDist = m_tpsCamDist;
+    {
+      const float wallH = 1.0f; // approximate wall height
+      const int steps = 16;
+      float dirX = desiredX - m_playerVisualPos.x;
+      float dirZ = desiredZ - m_playerVisualPos.z;
+      for (int i = steps; i >= 1; --i) {
+        float frac = static_cast<float>(i) / static_cast<float>(steps);
+        float sampleX = m_playerVisualPos.x + dirX * frac;
+        float sampleZ = m_playerVisualPos.z + dirZ * frac;
+        float sampleY = m_playerVisualPos.y + (desiredY - m_playerVisualPos.y) * frac;
+
+        // Convert to grid coordinates.
+        int gx = static_cast<int>(roundf(sampleX));
+        int gy = static_cast<int>(roundf(sampleZ));
+
+        // Check if this sample point is inside a wall.
+        bool blocked = false;
+        if (m_map.InBounds(gx, gy)) {
+          const Tile &tile = m_map.At(gx, gy);
+          if (tile.type == TileType::Wall ||
+              (tile.hasWall && !tile.wallDestroyed)) {
+            if (sampleY < wallH)
+              blocked = true;
+          }
+        }
+
+        if (blocked) {
+          // Pull camera to just before the wall.
+          float safeFrac = static_cast<float>(i - 1) / static_cast<float>(steps);
+          wantDist = m_tpsCamDist * safeFrac;
+          if (wantDist < kCamCollisionMinDist)
+            wantDist = kCamCollisionMinDist;
+          break;
+        }
+      }
+    }
+
+    // Smooth the actual distance toward the wanted distance.
+    float distDiff = wantDist - m_tpsCamActualDist;
+    if (distDiff < 0.0f) {
+      // Zoom in quickly when hitting a wall.
+      m_tpsCamActualDist += distDiff * std::min(1.0f, kCamCollisionSpeed * 2.0f * m_dt);
+    } else {
+      // Zoom out slowly when clear.
+      m_tpsCamActualDist += distDiff * std::min(1.0f, kCamCollisionSpeed * 0.5f * m_dt);
+    }
+    m_tpsCamActualDist = std::clamp(m_tpsCamActualDist, kCamCollisionMinDist, m_tpsCamDist);
+
+    // TPS camera position.
+    float tpsCamX = m_playerVisualPos.x + m_tpsCamActualDist * cosf(m_tpsCamPitch) * sinf(behindYaw);
+    float tpsCamY = m_tpsCamHeight + m_tpsCamActualDist * sinf(m_tpsCamPitch);
+    float tpsCamZ = m_playerVisualPos.z + m_tpsCamActualDist * cosf(m_tpsCamPitch) * cosf(behindYaw);
+
+    // TPS look direction.
+    float tpsLookTargetY = 1.0f;
+    float tdx = m_playerVisualPos.x - tpsCamX;
+    float tdy = tpsLookTargetY - tpsCamY;
+    float tdz = m_playerVisualPos.z - tpsCamZ;
+    float tpsHorizDist = sqrtf(tdx * tdx + tdz * tdz);
+    float tpsLookYaw = atan2f(tdx, tdz);
+    float tpsLookPitch = atan2f(tdy, tpsHorizDist);
+
+    // Top-down camera position: directly above player at fixed height.
+    float topDownH = kTopDownHeight;
+    float tdCamX = m_playerVisualPos.x;
+    float tdCamY = topDownH;
+    float tdCamZ = m_playerVisualPos.z;
+    // Top-down looks straight down: yaw doesn't matter much, pitch near -PI/2.
+    float tdLookYaw = 0.0f;
+    float tdLookPitch = -kTopDownPitch;
+
+    // Blend between TPS and top-down based on m_topDownBlend.
+    float b = m_topDownBlend;
+    camX = tpsCamX + (tdCamX - tpsCamX) * b;
+    camY = tpsCamY + (tdCamY - tpsCamY) * b;
+    camZ = tpsCamZ + (tdCamZ - tpsCamZ) * b;
+
+    // Blend look angles (handle yaw wrap for shortest path).
+    float yawDiff = tdLookYaw - tpsLookYaw;
+    while (yawDiff > 3.14159f) yawDiff -= 6.28318f;
+    while (yawDiff < -3.14159f) yawDiff += 6.28318f;
+    lookYaw = tpsLookYaw + yawDiff * b;
+    lookPitch = tpsLookPitch + (tdLookPitch - tpsLookPitch) * b;
   } else {
-    focusX = static_cast<float>(m_map.Width()) * 0.5f;
-    focusZ = static_cast<float>(m_map.Height()) * 0.5f;
+    // Overview orbit camera for menus.
+    float focusX = static_cast<float>(m_map.Width()) * 0.5f;
+    float focusZ = static_cast<float>(m_map.Height()) * 0.5f;
+
+    camX = focusX + m_cameraDistance * cosf(m_cameraPitch) * sinf(m_cameraYaw);
+    camY = m_cameraDistance * sinf(m_cameraPitch);
+    camZ = focusZ + m_cameraDistance * cosf(m_cameraPitch) * cosf(m_cameraYaw);
+
+    float dx = focusX - camX;
+    float dy = 0.0f - camY;
+    float dz = focusZ - camZ;
+    float horizDist = sqrtf(dx * dx + dz * dz);
+    lookYaw = atan2f(dx, dz);
+    lookPitch = atan2f(dy, horizDist);
   }
 
-  float camX =
-      focusX + m_cameraDistance * cosf(m_cameraPitch) * sinf(m_cameraYaw);
-  float camY = m_cameraDistance * sinf(m_cameraPitch);
-  float camZ =
-      focusZ + m_cameraDistance * cosf(m_cameraPitch) * cosf(m_cameraYaw);
+  // Screen shake: add high-frequency offset that decays over time.
+  if (m_shakeTimer > 0.0f) {
+    float decay = m_shakeTimer / kShakeDuration; // 1→0 fade
+    float t = m_stageTimer * kShakeFrequency;
+    float offsetX = sinf(t * 6.28318f) * m_shakeIntensity * decay;
+    float offsetY = cosf(t * 1.7f * 6.28318f) * m_shakeIntensity * decay * 0.6f;
+    camX += offsetX;
+    camY += offsetY;
+  }
 
   m_camera->SetPosition(camX, camY, camZ);
-
-  // Compute yaw/pitch to look at focus point.
-  float dx = focusX - camX;
-  float dy = 0.0f - camY;
-  float dz = focusZ - camZ;
-  float horizDist = sqrtf(dx * dx + dz * dz);
-  float lookYaw = atan2f(dx, dz);
-  float lookPitch = atan2f(dy, horizDist);
-
   m_camera->SetYawPitch(lookYaw, lookPitch);
 
   // Procedural tile animation time.
@@ -1317,8 +2089,8 @@ void GridGame::BuildScene(FrameData &frame) {
   m_map.BuildRenderItems(m_meshIds, frame.opaqueItems, frame.pointLights,
                          m_stageTimer);
 
-  // Neon grid edge lines — thin cubes along tile borders.
-  if (m_gridLineMeshId != UINT32_MAX && m_map.Width() > 0) {
+  // Neon grid edge lines — thin cubes along tile borders (editor/menu only, hidden during gameplay).
+  if (m_gridLineMeshId != UINT32_MAX && m_map.Width() > 0 && !inGameplay) {
     const float lineH = 0.03f;  // height above ground
     const float lineW = 0.03f;  // line thickness
     int gw = m_map.Width();
@@ -1343,8 +2115,8 @@ void GridGame::BuildScene(FrameData &frame) {
     }
   }
 
-  // Phase 6: colored tile edge borders for hazard/special tiles.
-  {
+  // Phase 6: colored tile edge borders for hazard/special tiles (editor/menu only).
+  if (!inGameplay) {
     const float bH = 0.05f;  // border height above ground
     const float bW = 0.04f;  // border thickness
     const float bLen = 1.0f; // full tile width
@@ -1427,8 +2199,8 @@ void GridGame::BuildScene(FrameData &frame) {
   }
 
   // Phase 3: render towers and telegraph tiles.
-  if (m_state == GridGameState::Playing || m_state == GridGameState::Paused ||
-      m_state == GridGameState::StageComplete) {
+  if (m_state == GridGameState::Intro || m_state == GridGameState::Playing ||
+      m_state == GridGameState::Paused || m_state == GridGameState::StageComplete) {
     for (const auto &tower : m_towers) {
       TowerPhase phase = GetTowerPhase(tower);
 
@@ -1544,12 +2316,77 @@ void GridGame::BuildScene(FrameData &frame) {
     }
   }
 
+  // Render hazard beams (row/column beams that grow from thin to thick).
+  if ((m_state == GridGameState::Playing || m_state == GridGameState::Paused) &&
+      m_hazardBeamMeshId != UINT32_MAX) {
+    for (const auto &beam : m_hazardBeams) {
+      // Compute beam radius: grows from thin to thick over warn time.
+      float growT = std::min(beam.timer / kBeamWarnTime, 1.0f);
+      // Ease-in curve for dramatic growth.
+      float easedT = growT * growT;
+      float radius = kBeamMinRadius + (kBeamMaxRadius - kBeamMinRadius) * easedT;
+
+      // After damage, beam fades out (shrinks).
+      if (beam.timer > kBeamWarnTime) {
+        float fadeT = (beam.timer - kBeamWarnTime) / (kBeamLifetime - kBeamWarnTime);
+        radius *= (1.0f - fadeT);
+      }
+
+      if (radius < 0.001f) continue;
+
+      float beamY = kBeamFloatHeight;
+
+      if (beam.isRow) {
+        // Row beam stretches across full grid width along X.
+        float beamLen = static_cast<float>(m_map.Width());
+        float cx = static_cast<float>(m_map.Width()) * 0.5f - 0.5f;
+        float cz = static_cast<float>(beam.index);
+        XMMATRIX bw = XMMatrixScaling(beamLen, radius, radius) *
+                      XMMatrixTranslation(cx, beamY, cz);
+        frame.opaqueItems.push_back({m_hazardBeamMeshId, bw});
+      } else {
+        // Column beam stretches across full grid height along Z.
+        float beamLen = static_cast<float>(m_map.Height());
+        float cx = static_cast<float>(beam.index);
+        float cz = static_cast<float>(m_map.Height()) * 0.5f - 0.5f;
+        XMMATRIX bw = XMMatrixScaling(radius, radius, beamLen) *
+                      XMMatrixTranslation(cx, beamY, cz);
+        frame.opaqueItems.push_back({m_hazardBeamMeshId, bw});
+      }
+
+      // Add a glow light along the beam.
+      GPUPointLight beamLight{};
+      if (beam.isRow) {
+        beamLight.position = {static_cast<float>(m_map.Width()) * 0.5f - 0.5f,
+                              beamY + 0.5f,
+                              static_cast<float>(beam.index)};
+      } else {
+        beamLight.position = {static_cast<float>(beam.index),
+                              beamY + 0.5f,
+                              static_cast<float>(m_map.Height()) * 0.5f - 0.5f};
+      }
+      float lightIntensity = 2.0f * std::min(beam.timer / kBeamWarnTime, 1.0f);
+      if (beam.timer > kBeamWarnTime) {
+        float fadeT = (beam.timer - kBeamWarnTime) / (kBeamLifetime - kBeamWarnTime);
+        lightIntensity *= (1.0f - fadeT);
+      }
+      beamLight.range = 4.0f;
+      beamLight.color = {0.6f, 0.1f, 1.0f};  // purple glow
+      beamLight.intensity = lightIntensity;
+      frame.pointLights.push_back(beamLight);
+    }
+  }
+
   // Render player and cargo during gameplay.
-  if (m_state == GridGameState::Playing || m_state == GridGameState::Paused ||
-      m_state == GridGameState::StageComplete) {
-    // Player cube (scale 0.6, sitting on tile surface).
-    XMMATRIX playerWorld = XMMatrixScaling(0.6f, 0.6f, 0.6f) *
-                           XMMatrixTranslation(m_playerVisualPos.x, 0.5f,
+  if (m_state == GridGameState::Intro || m_state == GridGameState::Playing ||
+      m_state == GridGameState::Paused ||
+      m_state == GridGameState::StageComplete || m_state == GridGameState::StageFail) {
+    // Player model: VRM is ~1.6m tall, scale to fit ~0.8 units tall on tile.
+    // Feet at Y=0.01 (just above tile surface). Rotate to face movement direction.
+    const float playerScale = 1.0f;
+    XMMATRIX playerWorld = XMMatrixScaling(playerScale, playerScale, playerScale) *
+                           XMMatrixRotationY(m_playerVisualYaw) *
+                           XMMatrixTranslation(m_playerVisualPos.x, 0.01f,
                                                m_playerVisualPos.z);
     frame.opaqueItems.push_back({m_playerMeshId, playerWorld});
 
@@ -1564,19 +2401,24 @@ void GridGame::BuildScene(FrameData &frame) {
     frame.pointLights.push_back(playerLight);
 
     // Cargo cube (scale 0.7).
+    // During drop-off, use animated Y from m_cargoVisualPos; otherwise sits at Y=0.5.
+    float cargoY = m_cargoDropping ? (m_cargoVisualPos.y + 0.5f) : 0.5f;
     XMMATRIX cargoWorld = XMMatrixScaling(0.7f, 0.7f, 0.7f) *
-                          XMMatrixTranslation(m_cargoVisualPos.x, 0.5f,
+                          XMMatrixTranslation(m_cargoVisualPos.x, cargoY,
                                               m_cargoVisualPos.z);
     frame.opaqueItems.push_back({m_cargoMeshId, cargoWorld});
 
     // Cargo glow light (subtle gold pulse — reduced to show texture detail).
-    float cargoPulse = 1.0f + 0.15f * sinf(t * 1.6f * 3.14159f);
-    GPUPointLight cargoLight{};
-    cargoLight.position = {m_cargoVisualPos.x, 0.8f, m_cargoVisualPos.z};
-    cargoLight.range = 2.0f;
-    cargoLight.color = {1.0f, 0.6f, 0.0f};
-    cargoLight.intensity = 0.5f * cargoPulse;
-    frame.pointLights.push_back(cargoLight);
+    // Hide light when cargo is dropping below the stage.
+    if (!m_cargoDropping) {
+      float cargoPulse = 1.0f + 0.15f * sinf(t * 1.6f * 3.14159f);
+      GPUPointLight cargoLight{};
+      cargoLight.position = {m_cargoVisualPos.x, 0.8f, m_cargoVisualPos.z};
+      cargoLight.range = 2.0f;
+      cargoLight.color = {1.0f, 0.6f, 0.0f};
+      cargoLight.intensity = 0.5f * cargoPulse;
+      frame.pointLights.push_back(cargoLight);
+    }
 
     // Goal beacon light: find first Goal tile and place a tall bright light.
     for (int gy = 0; gy < m_map.Height(); ++gy) {
@@ -1666,6 +2508,18 @@ void GridGame::BuildScene(FrameData &frame) {
     ImGui::TextColored(hpColor, " %s", hpBuf);
 
     ImGui::End();
+
+    // Camera mode indicator (top-right).
+    if (m_topDownBlend > 0.01f) {
+      ImGui::SetNextWindowPos(ImVec2(ImGui::GetIO().DisplaySize.x - 140, 10));
+      ImGui::SetNextWindowSize(ImVec2(0, 0));
+      ImGui::Begin("##CamMode", nullptr,
+                   ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize |
+                       ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoScrollbar |
+                       ImGuiWindowFlags_AlwaysAutoResize);
+      ImGui::TextColored(ImVec4(0.6f, 0.3f, 1.0f, 1.0f), "TOP-DOWN");
+      ImGui::End();
+    }
 
     // Pull mode badge.
     float indicatorY = (m_hasStageData && !m_loadedStage.name.empty()) ? 130.0f : 110.0f;
