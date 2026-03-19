@@ -126,13 +126,5 @@ notes/                  Learning notes / architecture docs
 - ⬚ **Phase 8 — Render Graph**: Automatic resource transitions, pass dependencies, barrier batching
 - ⬚ **Phase 9 — Multi-threaded Command Recording**: Parallel command list recording across threads
 
-### Final
-- **Portfolio demo polish**: capture-ready presentation
 
 
-### Action
-- Start of session: this is the new session, as always read @CLAUDE.md and @README.md.
-
-- After session: Test + Fix Bug. Check for every issue or error and fix it than go next (finish session). Give me what should I expect when finished implement.
-
-- Finish session: Update handoff, make a notes into @notes/game_engine about this session. Note style can refer to other note in @notes/. And also update @README.md.  Dont compact.
