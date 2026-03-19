@@ -1,3 +1,5 @@
+🌐 [English](README.md) | 📝 [Notion](https://www.notion.so/PR-912b9386a35a82e285d8017ebee602cf)
+
 ## DirectX 12 ポートフォリオプロジェクト — Grid Gauntlet
 
 **DirectX 12 ゲームプロジェクト** — カスタムレンダリングエンジンとモダンなグラフィックス機能を搭載し、その上に構築されたタクティカルパズルゲーム：**Grid Gauntlet**。
