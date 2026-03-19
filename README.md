@@ -1,3 +1,5 @@
+🌐 [日本語版 / Japanese](README_JP.md)
+
 ## DirectX 12 Portfolio Project — Grid Gauntlet
 
 A **DirectX 12 game project** featuring a custom rendering engine with modern graphics features and a tactical puzzle game built on top: **Grid Gauntlet**.
