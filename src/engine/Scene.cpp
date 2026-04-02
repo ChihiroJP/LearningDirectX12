@@ -6,6 +6,7 @@
 
 #include "Scene.h"
 #include "../DxContext.h"
+#include "../MeshRenderer.h"
 #include "../GltfLoader.h"
 #include "../ProceduralMesh.h"
 
@@ -201,6 +202,15 @@ void Scene::CreateEntityMeshGpu(DxContext &dx, Entity &entity) {
       }
     }
   }
+}
+
+void Scene::UpdateEntityMaterial(DxContext &dx, Entity &entity) {
+  if (!entity.mesh.has_value())
+    return;
+  auto &comp = entity.mesh.value();
+  if (comp.meshId == UINT32_MAX)
+    return; // no GPU mesh yet — nothing to update
+  dx.GetMeshRenderer().GetMeshMaterial(comp.meshId) = comp.material;
 }
 
 // ---- JSON serialization ----

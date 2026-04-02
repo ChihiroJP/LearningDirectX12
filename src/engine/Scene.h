@@ -55,6 +55,9 @@ public:
   // Create GPU resources for a single entity's mesh component.
   void CreateEntityMeshGpu(DxContext &dx, Entity &entity);
 
+  // Update only the material factors on an existing GPU mesh (no SRV re-allocation).
+  void UpdateEntityMaterial(DxContext &dx, Entity &entity);
+
   // JSON serialization.
   bool SaveToFile(const std::string &path) const;
   bool LoadFromFile(const std::string &path, DxContext &dx);

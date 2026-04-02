@@ -173,9 +173,14 @@ public:
     if (Entity *e = m_scene.FindEntity(m_entityId)) {
       if (e->mesh.has_value()) {
         e->mesh->material = m_matAfter;
-        e->mesh->texturePaths = m_pathsAfter;
-        e->mesh->meshId = UINT32_MAX; // force full GPU re-creation
-        m_scene.CreateEntityMeshGpu(m_dx, *e);
+        bool texturesChanged = (m_pathsBefore != m_pathsAfter);
+        if (texturesChanged) {
+          e->mesh->texturePaths = m_pathsAfter;
+          e->mesh->meshId = UINT32_MAX; // force full GPU re-creation
+          m_scene.CreateEntityMeshGpu(m_dx, *e);
+        } else {
+          m_scene.UpdateEntityMaterial(m_dx, *e);
+        }
       }
     }
   }
@@ -183,9 +188,14 @@ public:
     if (Entity *e = m_scene.FindEntity(m_entityId)) {
       if (e->mesh.has_value()) {
         e->mesh->material = m_matBefore;
-        e->mesh->texturePaths = m_pathsBefore;
-        e->mesh->meshId = UINT32_MAX;
-        m_scene.CreateEntityMeshGpu(m_dx, *e);
+        bool texturesChanged = (m_pathsBefore != m_pathsAfter);
+        if (texturesChanged) {
+          e->mesh->texturePaths = m_pathsBefore;
+          e->mesh->meshId = UINT32_MAX;
+          m_scene.CreateEntityMeshGpu(m_dx, *e);
+        } else {
+          m_scene.UpdateEntityMaterial(m_dx, *e);
+        }
       }
     }
   }

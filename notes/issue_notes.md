@@ -241,3 +241,38 @@ Replaced `m_isMoving` with a **linger timer** (`m_pushLingerTimer`) in `GridGame
 
 ### Status
 *   [x] Fixed
+
+---
+
+## [2026-04-02] Crash When Adjusting Material Sliders (SRV Descriptor Heap Exhaustion)
+
+### Symptoms
+* Adjusting metallic (or any material slider) on a procedural mesh (cube, etc.) caused a crash after several drag events.
+* `crash_log.txt` reported `ExceptionCode: 0x87a` (`DXGI_ERROR_DEVICE_REMOVED`) from the D3D12 debug layer during command list execution.
+* Stack trace pointed to `SetD3DDebugLayerStartupOptions` deep in `d3d12.dll` — GPU rejected a command.
+
+### Root Cause
+**SRV descriptor heap exhaustion.** Two code paths leaked descriptors:
+
+1. **SceneEditor.cpp:627** — `matChanged` flag triggered `scene.CreateEntityMeshGpu(dx, *e)` on every frame the slider was dragged. This was the primary leak path, called continuously during drag.
+2. **Commands.h:177** — `MaterialCommand::Execute()` set `meshId = UINT32_MAX`, forcing full GPU mesh re-creation for undo/redo commits.
+
+Both paths called `CreateMeshResources` → `AllocMainSrvCpu(6)`, allocating 6 SRV descriptors per call. The main SRV heap has 4096 descriptors allocated linearly (`m_mainSrvNext` only increments, never freed). Each slider drag event leaked 6 descriptors. After ~600 drag events, the heap was exhausted → `DXGI_ERROR_DEVICE_REMOVED`.
+
+Material factor changes (metallic, roughness, base color, emissive, UV, POM) only need the `Material` struct updated on the GPU — no new textures, no new SRVs. Full GPU re-creation is only necessary when texture paths change (load/clear/drag-drop a texture file).
+
+### Fix
+Added `Scene::UpdateEntityMaterial()` — writes material factors directly to the existing `MeshGpuResources::material` via `MeshRenderer::GetMeshMaterial()` mutable reference. Zero SRV allocations, zero mesh re-creation.
+
+* **SceneEditor.cpp:627** — Changed `CreateEntityMeshGpu` → `UpdateEntityMaterial` for the `matChanged` path.
+* **Commands.h:172-191** — `MaterialCommand::Execute()` and `Undo()` now compare texture paths. If only material factors changed, calls `UpdateEntityMaterial` instead of full re-creation.
+* **Scene.h / Scene.cpp** — New `UpdateEntityMaterial(DxContext&, Entity&)` method.
+
+### Files Modified
+* `src/engine/Scene.h` — Added `UpdateEntityMaterial()` declaration
+* `src/engine/Scene.cpp` — Added `UpdateEntityMaterial()` implementation, added `#include "../MeshRenderer.h"`
+* `src/engine/Commands.h` — `MaterialCommand::Execute()` and `Undo()` skip full GPU re-creation when only material factors change
+* `src/engine/SceneEditor.cpp` — `matChanged` path uses `UpdateEntityMaterial` instead of `CreateEntityMeshGpu`
+
+### Status
+*   [x] Fixed

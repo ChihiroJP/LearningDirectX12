@@ -624,7 +624,7 @@ void SceneEditor::DrawInspector(Scene &scene, DxContext &dx) {
         }
 
         if (matChanged) {
-          scene.CreateEntityMeshGpu(dx, *e);
+          scene.UpdateEntityMaterial(dx, *e);
         }
       } // end Material collapsing header
 
