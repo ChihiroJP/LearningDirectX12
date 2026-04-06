@@ -1,4 +1,4 @@
-🌐 [English](README.md) | 📝 [Notion](https://www.notion.so/PR-912b9386a35a82e285d8017ebee602cf) | 🎮 [ゲームデモ](https://drive.google.com/file/d/1EAyl9kpRZc_JBhBLI-EGTrH5DPt9840L/view?usp=sharing)
+🌐 [English](README.md) | 📝 [Notion](https://www.notion.so/PR-912b9386a35a82e285d8017ebee602cf) | 🎮 [Video/動画紹介](https://drive.google.com/file/d/1EAyl9kpRZc_JBhBLI-EGTrH5DPt9840L/view?usp=sharing)
 
 ## DirectX 12 ポートフォリオプロジェクト — Grid Gauntlet
 
